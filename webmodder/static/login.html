@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Web Modder — вход</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login">
+  <form class="login-card" onsubmit="location.href='/?token='+encodeURIComponent(this.t.value.trim());return false">
+    <div class="logo">▣ Web Modder</div>
+    <p>Откройте ссылку, которую сервер напечатал в консоли при запуске, или вставьте токен доступа.
+       Токен также лежит в файле <code>~/.web-modder/token.txt</code>.</p>
+    <input name="t" placeholder="токен доступа" autofocus autocomplete="off">
+    <button class="btn primary">Войти</button>
+  </form>
+</body>
+</html>

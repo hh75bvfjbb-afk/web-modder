@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="wm-token" content="__WM_TOKEN__">
+<title>Web Modder</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <button class="icon-btn only-mobile" id="menuBtn" aria-label="меню">☰</button>
+  <a class="logo" href="#/new">▣ Web Modder</a>
+  <span class="sub">моды для любых игр · на базе universal-modder</span>
+  <span class="spacer"></span>
+  <a class="badge" id="keyBadge" href="#/keys">ключи: …</a>
+  <a class="badge ghost" href="#/games">игры и база знаний</a>
+</header>
+
+<div class="layout">
+  <aside class="side" id="side">
+    <a class="btn primary wide" href="#/new">＋ Новый мод</a>
+    <div class="side-title">Сессии</div>
+    <nav id="sessionList" class="session-list"></nav>
+    <div class="side-foot" id="toolkitInfo"></div>
+  </aside>
+
+  <main id="main"></main>
+</div>
+
+<template id="tpl-new">
+  <section class="page narrow">
+    <h1>Что модифицируем?</h1>
+    <p class="muted">Опишите игру и идею. Агент найдёт игру на этом ПК, определит движок и путь моддинга, сделает
+      бэкап сохранений, напишет мод, сгенерирует ассеты и проверит всё в настоящей игре — по циклу universal-modder.</p>
+    <form id="newForm" class="card form">
+      <label>Игра <span class="muted">(название или папка; можно выбрать из найденных)</span>
+        <input name="game" list="gameList" placeholder="Terraria, Age of Empires II DE, C:\Games\Foo …">
+        <datalist id="gameList"></datalist>
+      </label>
+      <label>Идея
+        <textarea name="prompt" rows="5" required placeholder="Добавь ракетницу с самонаводящимися ракетами и тактическую ядерную бомбу, которая оставляет кратер. Спрайты — через fal."></textarea>
+      </label>
+      <div class="chips" id="examples"></div>
+      <details>
+        <summary>Настройки</summary>
+        <div class="grid2">
+          <label>Подтверждения
+            <select name="mode">
+              <option value="smart" selected>Умные — спрашивать только рискованное (запуск игры, ввод, реестр, установка, публикация)</option>
+              <option value="ask">Спрашивать почти всё</option>
+              <option value="auto">Без подтверждений</option>
+            </select>
+          </label>
+          <label>Глубина размышлений
+            <select name="effort">
+              <option value="medium">medium — быстрее и дешевле</option>
+              <option value="high" selected>high — по умолчанию</option>
+              <option value="xhigh">xhigh — для сложных модов</option>
+              <option value="max">max</option>
+            </select>
+          </label>
+        </div>
+        <label>Рабочая папка <span class="muted">(пусто = ~/WebModder/&lt;название&gt;)</span>
+          <input name="workdir" placeholder="D:\Mods\my-mod">
+        </label>
+      </details>
+      <div class="row">
+        <button class="btn primary">Начать</button>
+        <span class="muted" id="newHint"></span>
+      </div>
+    </form>
+  </section>
+</template>
+
+<template id="tpl-session">
+  <section class="session">
+    <div class="session-head">
+      <div class="title-wrap">
+        <h2 id="sTitle"></h2>
+        <div class="muted small" id="sMeta"></div>
+      </div>
+      <span class="status" id="sStatus"></span>
+      <select id="sMode" title="подтверждения">
+        <option value="smart">умные подтверждения</option>
+        <option value="ask">спрашивать всё</option>
+        <option value="auto">без подтверждений</option>
+      </select>
+      <button class="btn" id="sFiles">Файлы</button>
+      <button class="btn danger" id="sStop">Стоп</button>
+      <button class="btn" id="sResume">Продолжить</button>
+      <button class="icon-btn" id="sDelete" title="удалить сессию">🗑</button>
+    </div>
+    <div class="session-body">
+      <div class="timeline" id="timeline"></div>
+      <aside class="files" id="filesPanel" hidden>
+        <div class="files-head"><b>Папка сессии</b><button class="icon-btn" id="filesClose">✕</button></div>
+        <div class="muted small" id="filesPath"></div>
+        <div id="filesList"></div>
+        <div id="filePreview"></div>
+      </aside>
+    </div>
+    <div class="live" id="live" hidden></div>
+    <form class="composer" id="composer">
+      <textarea id="msg" rows="2" placeholder="Сообщение агенту… (Ctrl+Enter — отправить)"></textarea>
+      <button class="btn primary">Отправить</button>
+    </form>
+  </section>
+</template>
+
+<template id="tpl-keys">
+  <section class="page">
+    <h1>Ключи и пополнение</h1>
+    <p class="muted">Вставьте <b>любой</b> ключ — провайдер определится сам (Anthropic, OpenAI, OpenRouter, Gemini, DeepSeek,
+      Groq, Mistral, xAI, Together, Fireworks, fal.ai) — или укажите адрес своего OpenAI-совместимого сервера (Ollama, LM Studio, vLLM).
+      Агент использует ключи по приоритету и <b>не прерывается</b>: при лимите, перегрузке или окончании средств он
+      переключается на следующий ключ, а если рабочих ключей нет — ждёт и сам продолжает, как только вы добавите ключ
+      или пополните счёт.</p>
+    <form id="keyForm" class="card form">
+      <label>Ключи <span class="muted">(можно несколько — по одному в строке)</span>
+        <textarea name="secret" rows="3" placeholder="sk-ant-…&#10;sk-or-…&#10;AIza…&#10;fal-ключ вида uuid:secret"></textarea>
+      </label>
+      <details>
+        <summary>Дополнительно</summary>
+        <div class="grid3">
+          <label>Провайдер <select name="provider" id="provSelect"><option value="auto">определить автоматически</option></select></label>
+          <label>Адрес API (для своего сервера) <input name="base" placeholder="http://localhost:11434/v1"></label>
+          <label>Модель <input name="model" placeholder="по умолчанию — лучшая доступная"></label>
+        </div>
+        <label>Название <input name="label" placeholder="например: рабочий ключ"></label>
+      </details>
+      <div class="row"><button class="btn primary">Добавить / пополнить</button><span id="keyMsg" class="muted"></span></div>
+    </form>
+    <div id="keyTable"></div>
+    <div class="card muted small">
+      <b>Как это работает.</b> Повторная вставка того же ключа = «пополнить»: ключ проверяется и снова включается.
+      «Лимит токенов» — ваш собственный бюджет на ключ: когда он израсходован, ключ отключается, а работа идёт на
+      следующем; увеличьте лимит, чтобы пополнить. Ключ, у которого закончились деньги, ставится на паузу на 30 минут
+      и пробуется снова сам — пополните счёт у провайдера, и агент подхватит его без перезапуска. Ключи хранятся
+      только на этом ПК (<code>~/.web-modder/keys.json</code>) и не попадают в команды агента.
+    </div>
+  </section>
+</template>
+
+<template id="tpl-games">
+  <section class="page">
+    <h1>Игры на этом ПК</h1>
+    <p class="muted">Поиск установок Steam, Epic и Xbox через <code>um scan --list</code>.</p>
+    <div class="row"><button class="btn" id="scanBtn">Сканировать</button><span class="muted" id="scanMsg"></span></div>
+    <div id="gamesList" class="games"></div>
+    <h1>База знаний</h1>
+    <p class="muted">Полевые заметки агентов о том, как моддили конкретные игры (<code>um kb search</code>).</p>
+    <form id="kbForm" class="row"><input name="q" placeholder="terraria, unreal pak, bannerlord…"><button class="btn">Искать</button></form>
+    <div id="kbResults"></div>
+  </section>
+</template>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+anthropic>=1.0
+# universal-modder's own dependencies (its `um` CLI runs inside this Python)
+pillow>=10
+numpy>=1.24
+pyyaml>=6
