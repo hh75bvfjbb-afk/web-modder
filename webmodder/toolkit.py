@@ -127,25 +127,21 @@ def agents_md() -> str:
 # ---------------------------------------------------------------------------- running um
 
 def bin_dir() -> Path:
-    """A folder with an `um` launcher that works without uv, put first on the agent's PATH."""
+    """A folder with an `um` launcher that works without uv, put first on the agent's PATH.
+
+    The launchers hold no paths: they run "$WM_UM_EXE" from the environment (see env()). A path written into
+    the file broke as soon as it had non-ASCII characters (a "D:\\Загрузки\\..." folder): Windows saves the
+    file in its ANSI code page, while Git Bash and cmd each read it in a different one.
+    """
     d = toolkit_dir().parent / "wm-bin"
     d.mkdir(parents=True, exist_ok=True)
-    py = sys.executable
     sh = d / "um"
-    if FROZEN:
-        sh.write_text(f'#!/usr/bin/env bash\nexec "{py.replace(chr(92), "/")}" --um "$@"\n', newline="\n")
-    elif os.name == "nt":  # Git Bash: PYTHONPATH is already in the environment in Windows form
-        sh.write_text(f'#!/usr/bin/env bash\nexec "{py.replace(chr(92), "/")}" -m um "$@"\n', newline="\n")
-    else:
-        sh.write_text(f'#!/usr/bin/env bash\nPYTHONPATH="{toolkit_dir()}${{PYTHONPATH:+:$PYTHONPATH}}" exec "{py}" -m um "$@"\n')
+    sh.write_text('#!/usr/bin/env bash\nexec "$WM_UM_EXE" $WM_UM_ARGS "$@"\n', encoding="ascii", newline="\n")
     try:
         sh.chmod(0o755)
     except OSError:
         pass
-    if FROZEN:
-        (d / "um.cmd").write_text(f'@echo off\r\n"{py}" --um %*\r\n')
-    else:
-        (d / "um.cmd").write_text(f'@echo off\r\nset "PYTHONPATH={toolkit_dir()};%PYTHONPATH%"\r\n"{py}" -m um %*\r\n')
+    (d / "um.cmd").write_text('@echo off\r\n"%WM_UM_EXE%" %WM_UM_ARGS% %*\r\n', encoding="ascii", newline="")
     return d
 
 
@@ -154,6 +150,8 @@ def env(fal_key: str | None = None) -> dict:
     e["PATH"] = str(bin_dir()) + os.pathsep + e.get("PATH", "")
     e["PYTHONPATH"] = str(toolkit_dir()) + (os.pathsep + e["PYTHONPATH"] if e.get("PYTHONPATH") else "")
     e["PYTHONIOENCODING"] = "utf-8"
+    e["WM_UM_EXE"] = sys.executable  # the um launchers run this: WebModder.exe --um, or python -m um
+    e["WM_UM_ARGS"] = "--um" if FROZEN else "-m um"
     e["UM_NO_UV"] = "1"
     # English compiler/msbuild messages: models know them far better than localized ones
     e.setdefault("DOTNET_CLI_UI_LANGUAGE", "en")

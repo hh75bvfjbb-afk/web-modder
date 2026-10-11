@@ -58,6 +58,24 @@ jobs:
           if (-not $ok) { throw "server did not come up" }
           "server OK, universal-modder $($r.toolkit.version)"
 
+      - name: Smoke test from a Cyrillic folder through Git Bash
+        shell: pwsh
+        env:
+          WM_HOME: ${{ runner.temp }}\wm-home
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP "Загрузки\моды"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item .\dist\WebModder.exe $dir
+          $exe = Join-Path $dir "WebModder.exe"
+          & $exe --um --version
+          if ($LASTEXITCODE -ne 0) { throw "exe in a Cyrillic folder failed" }
+          # exactly what the agent's um launcher does inside Git Bash
+          $env:WM_UM_EXE = $exe
+          $env:WM_UM_ARGS = "--um"
+          $out = & "C:\Program Files\Git\bin\bash.exe" -c 'exec "$WM_UM_EXE" $WM_UM_ARGS --version'
+          if ($LASTEXITCODE -ne 0 -or "$out" -notmatch "universal-modder") { throw "um via Git Bash failed: $out" }
+          "OK: $out"
+
       - uses: actions/upload-artifact@v4
         with:
           name: WebModder-windows

@@ -392,3 +392,24 @@ def test_windows_shells_print_cyrillic(tmp_path, monkeypatch, kind):
     else:
         out, _, err = r.t_shell("um --version")  # the um launcher works from Git Bash
         assert not err and "universal-modder" in out, out
+
+
+def test_um_launcher_survives_non_ascii_install_path(tmp_path, monkeypatch):
+    """WebModder.exe in "D:\\Загрузки\\..." broke the um launcher (the path was written into it in cp1251)."""
+    import sys
+
+    from webmodder import toolkit, tools
+
+    if not toolkit.is_ready():
+        pytest.skip("needs WM_TEST_TOOLKIT")
+    d = toolkit.bin_dir()
+    for f in (d / "um", d / "um.cmd"):
+        f.read_bytes().decode("ascii")  # no paths in the launchers at all
+    if os.name == "nt":
+        pytest.skip("symlinking python.exe needs admin; the exe smoke test covers Windows")
+    odd = tmp_path / "Загрузки" / "моды"
+    odd.mkdir(parents=True)
+    (odd / "python3").symlink_to(sys.executable)
+    monkeypatch.setattr(sys, "executable", str(odd / "python3"))
+    out, _, err = tools.Runner(tmp_path, lambda: None).t_shell("um --version")
+    assert not err and "universal-modder" in out, out
