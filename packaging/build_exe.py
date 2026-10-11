@@ -54,6 +54,12 @@ def um_imports(tk: Path) -> list[str]:
 def main():
     import PyInstaller.__main__
 
+    for stream in (sys.stdout, sys.stderr):  # a Windows CI console is cp1252: Cyrillic must not crash the build
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
     tk = toolkit_snapshot()
     hidden = um_imports(tk) + ["numpy", "yaml", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFont", "PIL.ImageFilter",
                                 "PIL.ImageOps", "PIL.ImageChops", "PIL.ImageEnhance", "anthropic"]

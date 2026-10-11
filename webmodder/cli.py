@@ -10,6 +10,11 @@ from webmodder import __version__
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
+    for stream in (sys.stdout, sys.stderr):  # Russian text must not crash a cp1252 console or a redirected log
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
     if argv[:1] == ["--um"]:  # the exe doubles as the `um` command for the agent
         from webmodder.toolkit import run_um
 
