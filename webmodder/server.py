@@ -30,9 +30,9 @@ class App:
         self.pool = KeyPool()
         self.manager = Manager(self.pool)
         self._games: tuple[float, object] = (0, None)
-        self._fl: tuple[float, bool] = (0, False)
+        self._fl: tuple[float, str] = (0, "")
 
-    def freellmapi_running(self) -> bool:
+    def freellmapi_running(self) -> str:
         """Checked at most once a minute, in the background, so /api/state never waits on it."""
         if time.time() - self._fl[0] > 60:
             self._fl = (time.time(), self._fl[1])
@@ -167,7 +167,7 @@ def make_handler(app: App):
                                    "toolkit": {"ready": toolkit.is_ready(), "version": toolkit.version() if toolkit.is_ready() else None,
                                                "path": str(toolkit.toolkit_dir())},
                                    "shell": tools.shell_name(),
-                                   "freellmapi_running": app.freellmapi_running(),
+                                   "freellmapi_running": app.freellmapi_running(),  # origin or ""
                                    "freellmapi_added": any(k["provider"] == "freellmapi" for k in pool.keys)})
             # ------------------------------------------------ keys
             if p == ["keys"] and method == "POST":
@@ -329,7 +329,7 @@ def serve(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True):
     httpd = ThreadingHTTPServer((host, port), make_handler(app))
     httpd.daemon_threads = True
     url = f"http://{'127.0.0.1' if host in ('0.0.0.0', '::') else host}:{port}/?token={app.token}"
-    print(f"\n  Web Modder запущен: {url}\n  (ссылка с токеном — не публикуйте её)\n")
+    print(f"\n  Web Modder запущен: {url}\n  (ссылка с токеном — не публикуйте её; окно не закрывайте, пока работаете)\n", flush=True)
     if host not in ("127.0.0.1", "localhost", "::1"):
         print("  ВНИМАНИЕ: сервер доступен из сети. Любой, у кого есть токен, может выполнять команды на этом ПК.\n")
     if open_browser:

@@ -1,0 +1,70 @@
+# Builds WebModder.exe on Windows, smoke-tests it and publishes it as the "webmodder-latest" release.
+name: build-exe
+
+on:
+  push:
+    branches: [main, master, "claude/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: python -m pip install -r requirements.txt pyinstaller pytest
+
+      - name: Tests
+        shell: bash
+        run: |
+          git clone --depth 1 https://github.com/rehan-remade/universal-modder "$RUNNER_TEMP/universal-modder"
+          WM_TEST_TOOLKIT="$RUNNER_TEMP/universal-modder" python -m pytest -q tests
+
+      - name: Build
+        run: python packaging/build_exe.py
+
+      - name: Smoke test
+        shell: pwsh
+        env:
+          WM_HOME: ${{ runner.temp }}\wm-home
+          WM_TOKEN: smoke-token
+        run: |
+          .\dist\WebModder.exe --um --version
+          if ($LASTEXITCODE -ne 0) { throw "um --version failed" }
+          .\dist\WebModder.exe --um kb search terraria --limit 1 --json
+          if ($LASTEXITCODE -ne 0) { throw "um kb search failed" }
+          $p = Start-Process .\dist\WebModder.exe -ArgumentList "--no-browser","--port","8765" -PassThru
+          $ok = $false
+          foreach ($i in 1..30) {
+            Start-Sleep -Seconds 2
+            try {
+              $r = Invoke-RestMethod -Uri http://127.0.0.1:8765/api/state -Headers @{ "X-WM-Token" = "smoke-token" }
+              if ($r.toolkit.ready) { $ok = $true; break }
+            } catch { }
+          }
+          Stop-Process -Id $p.Id -Force
+          if (-not $ok) { throw "server did not come up" }
+          "server OK, universal-modder $($r.toolkit.version)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WebModder-windows
+          path: dist/WebModder.exe
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete webmodder-latest --yes --cleanup-tag || true
+          gh release create webmodder-latest dist/WebModder.exe --target "$GITHUB_SHA" --prerelease \
+            --title "Web Modder (последняя сборка)" \
+            --notes "Собрано из ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7}. Скачайте WebModder.exe и запустите. Инструкция: ИНСТРУКЦИЯ.md в репозитории."

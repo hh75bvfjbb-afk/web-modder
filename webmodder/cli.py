@@ -3,11 +3,17 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 
 from webmodder import __version__
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["--um"]:  # the exe doubles as the `um` command for the agent
+        from webmodder.toolkit import run_um
+
+        return run_um(argv[1:])
     ap = argparse.ArgumentParser(prog="webmodder", description="Web Modder: моды для любых игр через браузер")
     ap.add_argument("--host", default=os.environ.get("WM_HOST", "127.0.0.1"),
                     help="адрес (по умолчанию 127.0.0.1 — только этот ПК)")

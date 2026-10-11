@@ -12,6 +12,8 @@
                                                                             ──► игра на этом ПК
 ```
 
+**Быстрый старт для Windows:** скачайте готовый `WebModder.exe` и следуйте [ИНСТРУКЦИЯ.md](ИНСТРУКЦИЯ.md).
+
 ## Почему это локальное приложение, а не сайт в интернете
 
 Моды делаются с **установленной у вас игрой**: агент читает её файлы, ставит загрузчики, делает бэкап
@@ -63,7 +65,7 @@ pip install -r requirements.txt && python run.py
 
 1. Установите FreeLLMAPI: [установщик для Windows/macOS](https://github.com/tashfeenahmed/freellmapi/releases/latest)
    или `curl -fsSL https://freellmapi.co/install.sh | bash` (Docker).
-2. Откройте его панель `http://localhost:3001`, добавьте ключи провайдеров на странице **Keys**
+2. Откройте его панель (значок в трее → **Open FreeLLMAPI**; у Docker-версии — `http://localhost:3001`), добавьте ключи провайдеров на странице **Keys**
    и скопируйте оттуда единый ключ `freellmapi-…`.
 3. В Web Modder на вкладке «Ключи» заполните блок **«Роутер FreeLLMAPI»**: адрес, единый ключ, стратегию
    (`auto:smart` — самые умные модели, по умолчанию; `auto`, `auto:reliable`, `auto:balanced`, `auto:fast`)

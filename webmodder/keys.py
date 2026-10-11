@@ -47,7 +47,7 @@ PROVIDERS: dict[str, dict] = {
                  "default": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8", "prefer": ["Qwen/Qwen3-Coder", "deepseek-ai/DeepSeek-V3"]},
     "fireworks": {"name": "Fireworks", "kind": "openai", "base": "https://api.fireworks.ai/inference/v1",
                   "default": "accounts/fireworks/models/qwen3-coder-480b-a35b-instruct", "prefer": ["qwen3-coder", "deepseek-v3"]},
-    "freellmapi": {"name": "FreeLLMAPI (роутер бесплатных ключей)", "kind": "openai", "base": "http://localhost:3001/v1",
+    "freellmapi": {"name": "FreeLLMAPI (роутер бесплатных ключей)", "kind": "openai", "base": "http://localhost:31415/v1",
                    "default": "auto:smart", "prefer": [], "fixed_default": True},
     "custom": {"name": "Свой сервер (OpenAI-совместимый)", "kind": "openai", "base": "", "default": "", "prefer": []},
     "fal": {"name": "fal.ai (ассеты)", "kind": "fal", "base": "https://fal.run", "default": "", "prefer": []},
@@ -66,10 +66,14 @@ def next_month_start(t: float | None = None) -> float:
     return float(calendar.timegm((y, m, 1, 0, 0, 0)))
 
 
-def discover_freellmapi(base: str = "http://localhost:3001") -> bool:
-    """Is a FreeLLMAPI router running there? Its /v1/providers answers 401 without the unified key."""
-    status, _, err = _http_json(base.rstrip("/") + "/v1/providers", {}, timeout=2)
-    return status == 401 and "api key" in err.lower() or status == 200
+def discover_freellmapi(bases=("http://localhost:31415", "http://localhost:3001")) -> str:
+    """Where a FreeLLMAPI router is running: the desktop app listens on 31415, Docker on 3001.
+    Its /v1/providers answers 401 without the unified key. Returns the origin, or ""."""
+    for base in bases:
+        status, _, err = _http_json(base.rstrip("/") + "/v1/providers", {}, timeout=2)
+        if status == 200 or (status == 401 and "api key" in err.lower()):
+            return base
+    return ""
 
 
 COOLDOWN_MIN, COOLDOWN_MAX = 20, 900
@@ -188,6 +192,8 @@ class KeyPool:
         secret = secret.strip()
         if not secret and not base:
             raise ValueError("пустой ключ")
+        if not base and (secret.startswith("freellmapi-") or provider == "freellmapi"):
+            base = discover_freellmapi() or "http://localhost:31415"
         if base and (secret.startswith("freellmapi-") or provider == "freellmapi"):
             provider, base = "freellmapi", base.rstrip("/") + ("" if base.rstrip("/").endswith("/v1") else "/v1")
         elif base:

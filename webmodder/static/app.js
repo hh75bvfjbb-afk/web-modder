@@ -62,11 +62,19 @@ async function refreshState() {
       <span class="sess-m">${esc((STATUS[s.status] || [s.status])[0])} · ${ago(s.updated)}</span>
     </a>`).join("") || `<div class="muted small pad">Пока пусто</div>`;
   const tk = STATE.toolkit || {};
-  $("#toolkitInfo").innerHTML = tk.ready ? `universal-modder ${esc(tk.version || "")}<br><span class="muted">${esc(STATE.shell)}</span>`
+  $("#toolkitInfo").innerHTML = tk.ready ? `universal-modder ${esc(tk.version || "")} · <a href="#" id="tkUpdate">обновить</a><br><span class="muted">${esc(STATE.shell)}</span>`
     : `<span class="warn-t">загружаю universal-modder…</span>`;
   if (location.hash.startsWith("#/keys") && !document.activeElement?.closest("#keyTable")) renderKeyTable();
 }
 setInterval(refreshState, 4000);
+document.addEventListener("click", async (e) => {
+  if (e.target.id !== "tkUpdate") return;
+  e.preventDefault();
+  e.target.textContent = "обновляю…";
+  try { const r = await api("toolkit/update", { method: "POST" }); alert("universal-modder: " + (r.output || "ok") + "\nверсия " + r.version); }
+  catch (err) { alert(err.message); }
+  refreshState();
+});
 $("#menuBtn").onclick = () => document.body.classList.toggle("side-open");
 
 // --------------------------------------------------------------------------- router
@@ -282,7 +290,9 @@ function viewKeys(main) {
   sel.innerHTML += Object.entries(STATE.providers || {}).map(([k, v]) => `<option value="${k}">${esc(v.name)}</option>`).join("");
   const fl = $("#flForm");
   $("#flState").innerHTML = STATE.freellmapi_added ? `<span class="chip ok">подключён</span>`
-    : STATE.freellmapi_running ? `<span class="chip ok">найден на localhost:3001</span>` : `<span class="chip idle">не найден на localhost:3001</span>`;
+    : STATE.freellmapi_running ? `<span class="chip ok">найден: ${esc(STATE.freellmapi_running)}</span>`
+    : `<span class="chip idle">не запущен (ищу на портах 31415 и 3001)</span>`;
+  if (STATE.freellmapi_running) fl.base.value = STATE.freellmapi_running;
   fl.onsubmit = async (e) => {
     e.preventDefault();
     const b = Object.fromEntries(new FormData(fl));

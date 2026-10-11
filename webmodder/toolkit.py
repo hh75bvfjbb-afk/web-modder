@@ -17,6 +17,11 @@ from pathlib import Path
 
 from webmodder.config import TOOLKIT_REPO, toolkit_dir
 
+# Inside WebModder.exe (PyInstaller) there is no python.exe: the exe runs `um` itself (`WebModder.exe --um ...`),
+# and a snapshot of universal-modder ships inside it so the first start works offline.
+FROZEN = bool(getattr(sys, "frozen", False))
+BUNDLED = Path(getattr(sys, "_MEIPASS", "")) / "universal-modder" if FROZEN else None
+
 
 def is_ready() -> bool:
     d = toolkit_dir()
@@ -29,6 +34,11 @@ def ensure(log=print) -> Path:
     if is_ready():
         return d
     d.parent.mkdir(parents=True, exist_ok=True)
+    if BUNDLED and (BUNDLED / "um" / "cli.py").exists():
+        log(f"распаковываю встроенную копию universal-modder -> {d}")
+        shutil.rmtree(d, ignore_errors=True)
+        shutil.copytree(BUNDLED, d)
+        return d
     if shutil.which("git"):
         log(f"клонирую {TOOLKIT_REPO} -> {d}")
         r = subprocess.run(["git", "clone", "--depth", "1", TOOLKIT_REPO, str(d)], capture_output=True, text=True)
@@ -122,12 +132,18 @@ def bin_dir() -> Path:
     d.mkdir(parents=True, exist_ok=True)
     py = sys.executable
     sh = d / "um"
-    sh.write_text(f'#!/usr/bin/env bash\nPYTHONPATH="{toolkit_dir()}${{PYTHONPATH:+:$PYTHONPATH}}" exec "{py}" -m um "$@"\n')
+    if FROZEN:
+        sh.write_text(f'#!/usr/bin/env bash\nexec "{py}" --um "$@"\n')
+    else:
+        sh.write_text(f'#!/usr/bin/env bash\nPYTHONPATH="{toolkit_dir()}${{PYTHONPATH:+:$PYTHONPATH}}" exec "{py}" -m um "$@"\n')
     try:
         sh.chmod(0o755)
     except OSError:
         pass
-    (d / "um.cmd").write_text(f'@echo off\r\nset "PYTHONPATH={toolkit_dir()};%PYTHONPATH%"\r\n"{py}" -m um %*\r\n')
+    if FROZEN:
+        (d / "um.cmd").write_text(f'@echo off\r\n"{py}" --um %*\r\n')
+    else:
+        (d / "um.cmd").write_text(f'@echo off\r\nset "PYTHONPATH={toolkit_dir()};%PYTHONPATH%"\r\n"{py}" -m um %*\r\n')
     return d
 
 
@@ -145,4 +161,15 @@ def env(fal_key: str | None = None) -> dict:
 
 
 def um_argv(args: list[str]) -> list[str]:
+    if FROZEN:
+        return [sys.executable, "--um", *args]
     return [sys.executable, "-m", "um", *args]
+
+
+def run_um(args: list[str]):
+    """`WebModder.exe --um ...`: run universal-modder's CLI from the checkout with the exe's bundled Python."""
+    ensure(log=lambda m: print(m, file=sys.stderr))
+    sys.path.insert(0, str(toolkit_dir()))
+    from um.cli import main
+
+    main(args)
