@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, quote, urlparse
 from webmodder import toolkit, tools
 from webmodder.agent import Manager
 from webmodder.config import access_token
-from webmodder.keys import PROVIDERS, KeyPool, list_models
+from webmodder.keys import PROVIDERS, KeyPool, _http_json, discover_freellmapi, list_models
 
 STATIC = Path(__file__).parent / "static"
 
@@ -30,6 +30,28 @@ class App:
         self.pool = KeyPool()
         self.manager = Manager(self.pool)
         self._games: tuple[float, object] = (0, None)
+        self._fl: tuple[float, bool] = (0, False)
+
+    def freellmapi_running(self) -> bool:
+        """Checked at most once a minute, in the background, so /api/state never waits on it."""
+        if time.time() - self._fl[0] > 60:
+            self._fl = (time.time(), self._fl[1])
+
+            def probe():
+                self._fl = (time.time(), discover_freellmapi())
+
+            threading.Thread(target=probe, daemon=True).start()
+        return self._fl[1]
+
+    def router_status(self, key: dict) -> dict:
+        """FreeLLMAPI's own view, read with the unified key: upstream providers and quota pools."""
+        base = (key.get("base") or PROVIDERS["freellmapi"]["base"]).rstrip("/")
+        h = {"Authorization": "Bearer " + key["secret"]}
+        st1, prov, err1 = _http_json(base + "/providers", h, timeout=8)
+        st2, fc, err2 = _http_json(base + "/quota-forecast", h, timeout=8)
+        return {"ok": st1 == 200, "error": "" if st1 == 200 else f"HTTP {st1} {err1[:200]}",
+                "providers": (prov or {}).get("providers", []), "counts": (prov or {}).get("counts", {}),
+                "pools": (fc or {}).get("pools", []) if st2 == 200 else []}
 
     def games(self, refresh: bool = False):
         if not refresh and self._games[1] is not None and time.time() - self._games[0] < 300:
@@ -144,7 +166,9 @@ def make_handler(app: App):
                                    "providers": {k: {"name": v["name"], "kind": v["kind"]} for k, v in PROVIDERS.items()},
                                    "toolkit": {"ready": toolkit.is_ready(), "version": toolkit.version() if toolkit.is_ready() else None,
                                                "path": str(toolkit.toolkit_dir())},
-                                   "shell": tools.shell_name()})
+                                   "shell": tools.shell_name(),
+                                   "freellmapi_running": app.freellmapi_running(),
+                                   "freellmapi_added": any(k["provider"] == "freellmapi" for k in pool.keys)})
             # ------------------------------------------------ keys
             if p == ["keys"] and method == "POST":
                 b = self._body()
@@ -156,6 +180,8 @@ def make_handler(app: App):
                     try:
                         k = pool.add(sec, provider=b.get("provider"), base=b.get("base") or None,
                                      model=b.get("model") or None, label=b.get("label") or None)
+                        if b.get("budget"):
+                            pool.update(k["id"], budget=b["budget"])
                         added.append(k["id"])
                     except ValueError as e:
                         errors.append(f"{sec[:8]}…: {e}")
@@ -171,6 +197,11 @@ def make_handler(app: App):
                 if method == "POST" and p[2:] == ["check"]:
                     pool.recheck(kid)
                     return self._json({"keys": pool.public()})
+                if method == "GET" and p[2:] == ["router"]:
+                    k = pool.get(kid)
+                    if not k or k["provider"] != "freellmapi":
+                        raise ValueError("это не ключ FreeLLMAPI")
+                    return self._json(app.router_status(k))
                 if method == "GET" and p[2:] == ["models"]:
                     k = pool.get(kid)
                     status, ids, err = list_models(k["provider"], k["secret"], k.get("base") or None)

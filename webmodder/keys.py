@@ -1,5 +1,9 @@
 """The key pool: paste any API key, the app works out whose it is, and the agent never stops on one key.
 
+A FreeLLMAPI router (github.com/tashfeenahmed/freellmapi) is a key like any other: its unified
+`freellmapi-...` key fronts dozens of free-tier provider keys, and the router itself rotates them.
+Every key can carry a monthly token limit that refills by itself on the 1st of the month (UTC).
+
 Every key is tried in priority order. A key that hits a rate limit cools down and comes back by itself; a key
 that is out of credit or revoked is parked until you top it up and press "check". When no key is usable the
 agent waits (it does not fail) and carries on the moment a key is added or a cooldown ends.
@@ -43,9 +47,30 @@ PROVIDERS: dict[str, dict] = {
                  "default": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8", "prefer": ["Qwen/Qwen3-Coder", "deepseek-ai/DeepSeek-V3"]},
     "fireworks": {"name": "Fireworks", "kind": "openai", "base": "https://api.fireworks.ai/inference/v1",
                   "default": "accounts/fireworks/models/qwen3-coder-480b-a35b-instruct", "prefer": ["qwen3-coder", "deepseek-v3"]},
+    "freellmapi": {"name": "FreeLLMAPI (роутер бесплатных ключей)", "kind": "openai", "base": "http://localhost:3001/v1",
+                   "default": "auto:smart", "prefer": [], "fixed_default": True},
     "custom": {"name": "Свой сервер (OpenAI-совместимый)", "kind": "openai", "base": "", "default": "", "prefer": []},
     "fal": {"name": "fal.ai (ассеты)", "kind": "fal", "base": "https://fal.run", "default": "", "prefer": []},
 }
+
+def month_key(t: float | None = None) -> str:
+    return time.strftime("%Y-%m", time.gmtime(t if t is not None else time.time()))
+
+
+def next_month_start(t: float | None = None) -> float:
+    """00:00 UTC on the 1st of next month: when monthly limits refill (FreeLLMAPI resets its caps then too)."""
+    g = time.gmtime(t if t is not None else time.time())
+    y, m = (g.tm_year + 1, 1) if g.tm_mon == 12 else (g.tm_year, g.tm_mon + 1)
+    import calendar
+
+    return float(calendar.timegm((y, m, 1, 0, 0, 0)))
+
+
+def discover_freellmapi(base: str = "http://localhost:3001") -> bool:
+    """Is a FreeLLMAPI router running there? Its /v1/providers answers 401 without the unified key."""
+    status, _, err = _http_json(base.rstrip("/") + "/v1/providers", {}, timeout=2)
+    return status == 401 and "api key" in err.lower() or status == 200
+
 
 COOLDOWN_MIN, COOLDOWN_MAX = 20, 900
 QUOTA_COOLDOWN = 1800
@@ -54,6 +79,8 @@ QUOTA_COOLDOWN = 1800
 def detect(secret: str) -> list[str]:
     """Candidate providers for a key, most likely first. Several candidates are resolved by probing."""
     s = secret.strip()
+    if s.startswith("freellmapi-"):
+        return ["freellmapi"]
     if re.fullmatch(r"[0-9a-f-]{20,}:[0-9a-zA-Z]{16,}", s):
         return ["fal"]
     for prefix, prov in (("sk-ant-", "anthropic"), ("sk-or-", "openrouter"), ("AIza", "gemini"), ("gsk_", "groq"),
@@ -103,6 +130,8 @@ def list_models(provider: str, secret: str, base: str | None = None) -> tuple[in
 
 def pick_model(provider: str, models: list[str]) -> str:
     p = PROVIDERS[provider]
+    if p.get("fixed_default"):  # a router: let it choose ("auto:smart") instead of pinning one upstream model
+        return p["default"]
     for pref in p["prefer"]:
         for m in models:
             if m.startswith(pref):
@@ -134,8 +163,13 @@ class KeyPool:
             v["masked"] = mask(k["secret"])
             v["provider_name"] = PROVIDERS.get(k["provider"], {}).get("name", k["provider"])
             v["kind"] = PROVIDERS.get(k["provider"], {}).get("kind")
+            self._roll(k)
             if k.get("status") == "cooldown":
                 v["cooldown_left"] = max(0, int(k.get("cooldown_until", 0) - now))
+            v["month_tokens"] = k["usage"].get("month_tokens", 0)
+            v["month_requests"] = k["usage"].get("month_requests", 0)
+            v["refill_at"] = next_month_start()
+            v["budget_hit"] = bool(k.get("budget_hit"))
             out.append(v)
         return out
 
@@ -154,13 +188,15 @@ class KeyPool:
         secret = secret.strip()
         if not secret and not base:
             raise ValueError("пустой ключ")
+        if base and (secret.startswith("freellmapi-") or provider == "freellmapi"):
+            provider, base = "freellmapi", base.rstrip("/") + ("" if base.rstrip("/").endswith("/v1") else "/v1")
+        elif base:
+            provider = provider if provider and provider != "auto" else "custom"
         for k in self.keys:
             if k["secret"] == secret and secret and (not base or k.get("base") == base):
                 # the same key pasted again = "top up": wake it up and re-check
                 self.recheck(k["id"]) if probe else self._revive(k)
                 return k
-        if base:
-            provider = provider if provider and provider != "auto" else "custom"
         cands = [provider] if provider and provider != "auto" else detect(secret)
         chosen, models, last_err = cands[0], [], ""
         if probe and PROVIDERS[cands[0]]["kind"] != "fal":
@@ -174,8 +210,10 @@ class KeyPool:
                 if len(cands) > 1:
                     raise ValueError("не удалось определить провайдера ключа: " + last_err)
         rec = {"id": uuid.uuid4().hex[:10], "provider": chosen, "secret": secret, "base": base or "",
-               "model": model or pick_model(chosen, models), "label": label or f"{PROVIDERS[chosen]['name']} {mask(secret)}",
-               "status": "active" if not last_err else "dead", "last_error": last_err, "priority": len(self.keys),
+               "model": model or pick_model(chosen, models), "label": label or f"{PROVIDERS[chosen]['name'].split(' (')[0]} {mask(secret)}",
+               "status": "active" if not last_err else "dead", "last_error": last_err,
+               # a router already spreads load over many free keys: try it before single keys
+               "priority": (min([x.get("priority", 0) for x in self.keys] or [0]) - 1) if chosen == "freellmapi" else len(self.keys),
                "budget": None, "usage": {"input": 0, "output": 0, "requests": 0, "errors": 0},
                "models": models[:300], "added": time.time(), "fails": 0}
         with self.cond:
@@ -195,8 +233,8 @@ class KeyPool:
             if "budget" in fields:
                 b = fields["budget"]
                 k["budget"] = int(b) if b not in (None, "", 0, "0") else None
-                if k["status"] == "dead" and k.get("last_error", "").startswith("лимит"):
-                    self._revive(k)
+                if k.get("budget_hit") and (not k["budget"] or k["usage"].get("month_tokens", 0) < k["budget"]):
+                    self._revive(k)  # raising the monthly limit tops the key up right away
             if "enabled" in fields:
                 if fields["enabled"]:
                     self._revive(k)
@@ -231,22 +269,34 @@ class KeyPool:
     def _revive(self, k: dict):
         k["status"], k["last_error"], k["fails"], k["cooldown_until"] = "active", "", 0, 0
         k.pop("compat", None)  # a re-check also retries the newer API features
-        if k.get("budget") and k["usage"]["input"] + k["usage"]["output"] >= k["budget"]:
-            k["usage"]["budget_base"] = k["usage"]["input"] + k["usage"]["output"]
+        k.pop("budget_hit", None)  # if the month's limit is still spent, _usable parks it again
+
+    def _roll(self, k: dict):
+        """New month: the monthly counter starts from zero and a key parked by its limit comes back."""
+        u = k["usage"]
+        m = month_key()
+        if u.get("month") != m:
+            u["month"], u["month_tokens"], u["month_requests"] = m, 0, 0
+            u.pop("budget_base", None)
+            if k.pop("budget_hit", None) and k["status"] == "cooldown":
+                k["status"], k["cooldown_until"], k["last_error"] = "active", 0, ""
 
     # ------------------------------------------------------------------ choosing a key
     def _usable(self, k: dict) -> bool:
+        self._roll(k)
         if k["status"] == "cooldown" and k.get("cooldown_until", 0) <= time.time():
             k["status"] = "active"
+            k.pop("budget_hit", None)
         if k["status"] != "active":
             return False
         b = k.get("budget")
-        if b:
-            used = k["usage"]["input"] + k["usage"]["output"] - k["usage"].get("budget_base", 0)
-            if used >= b:
-                k["status"], k["last_error"] = "dead", "лимит токенов исчерпан — пополните (увеличьте лимит)"
-                self.save()
-                return False
+        if b and k["usage"].get("month_tokens", 0) >= b:
+            refill = next_month_start()
+            k["status"], k["cooldown_until"], k["budget_hit"] = "cooldown", refill, True
+            k["last_error"] = ("месячный лимит токенов исчерпан — пополнится сам " + time.strftime("%d.%m.%Y", time.gmtime(refill))
+                               + " (или увеличьте лимит)")
+            self.save()
+            return False
         return True
 
     def acquire(self, kind: str = "llm", prefer: str | None = None, exclude: set | None = None) -> dict | None:
@@ -277,10 +327,14 @@ class KeyPool:
     # ------------------------------------------------------------------ outcomes
     def success(self, k: dict, usage: dict):
         with self.cond:
+            self._roll(k)
             u = k["usage"]
+            spent = int(usage.get("input", 0)) + int(usage.get("output", 0))
             u["input"] += int(usage.get("input", 0))
             u["output"] += int(usage.get("output", 0))
             u["requests"] += 1
+            u["month_tokens"] = u.get("month_tokens", 0) + spent
+            u["month_requests"] = u.get("month_requests", 0) + 1
             k["fails"] = 0
             self.save()
 
@@ -295,7 +349,8 @@ class KeyPool:
             elif kind == "quota":
                 # out of credit or a daily quota: park it for a while and try again by itself, so a top-up on the
                 # provider's site is picked up without touching the app
-                k["status"], k["cooldown_until"] = "cooldown", time.time() + QUOTA_COOLDOWN
+                # FreeLLMAPI's monthly cap answers with Retry-After = seconds to the next month: honour it
+                k["status"], k["cooldown_until"] = "cooldown", time.time() + (retry_after or QUOTA_COOLDOWN)
             else:
                 base = retry_after if retry_after else COOLDOWN_MIN * (2 ** min(k["fails"] - 1, 6))
                 if kind == "network":

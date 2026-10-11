@@ -134,3 +134,10 @@ body.login { display: grid; place-items: center; }
   .page { padding: 16px; }
   .files { position: fixed; inset: 52px 0 0 0; width: auto; z-index: 6; }
 }
+
+.meter { height: 6px; background: var(--panel2); border-radius: 99px; overflow: hidden; margin: 4px 0; }
+.meter span { display: block; height: 100%; background: var(--ok); }
+.meter.high span { background: var(--warn); } .meter.full span { background: var(--err); }
+.fl { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.router-box .pool { display: grid; grid-template-columns: 180px 1fr 220px; gap: 8px; align-items: center; font-size: 12.5px; }
+@media (max-width: 860px) { .router-box .pool { grid-template-columns: 1fr; } }

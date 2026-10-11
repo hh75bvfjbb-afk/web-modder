@@ -352,6 +352,9 @@ class Manager:
                 tried.add(key["id"])
                 continue
             self.pool.success(key, resp["usage"])
+            if resp.get("model") and resp["model"] != key["model"] and resp["model"] != s.d.get("served_model"):
+                s.d["served_model"] = resp["model"]  # a router (FreeLLMAPI, OpenRouter) says who actually answered
+                s.emit("info", text=f"Отвечает: {resp['model']} (через {key['label']})")
             u = s.d.setdefault("usage", {"input": 0, "output": 0, "requests": 0})
             u["input"] += resp["usage"]["input"]
             u["output"] += resp["usage"]["output"]

@@ -280,6 +280,22 @@ function viewKeys(main) {
   mount(main, "#tpl-keys");
   const sel = $("#provSelect");
   sel.innerHTML += Object.entries(STATE.providers || {}).map(([k, v]) => `<option value="${k}">${esc(v.name)}</option>`).join("");
+  const fl = $("#flForm");
+  $("#flState").innerHTML = STATE.freellmapi_added ? `<span class="chip ok">подключён</span>`
+    : STATE.freellmapi_running ? `<span class="chip ok">найден на localhost:3001</span>` : `<span class="chip idle">не найден на localhost:3001</span>`;
+  fl.onsubmit = async (e) => {
+    e.preventDefault();
+    const b = Object.fromEntries(new FormData(fl));
+    b.provider = "freellmapi";
+    $("#flMsg").textContent = "проверяю…";
+    try {
+      const r = await api("keys", { method: "POST", body: b });
+      $("#flMsg").textContent = r.errors.length ? r.errors.join("; ") : "подключено — FreeLLMAPI стоит первым в очереди";
+      if (r.added.length) fl.secret.value = "";
+      STATE.keys = r.keys; renderKeyTable(); refreshState();
+      for (const id of r.added) loadRouter(id);
+    } catch (err) { $("#flMsg").textContent = err.message; }
+  };
   const f = $("#keyForm");
   f.onsubmit = async (e) => {
     e.preventDefault();
@@ -293,13 +309,24 @@ function viewKeys(main) {
     } catch (err) { $("#keyMsg").textContent = err.message; }
   };
   renderKeyTable();
+  for (const k of STATE.keys || []) if (k.provider === "freellmapi") loadRouter(k.id);
+}
+const ROUTER = {};  // key id -> last FreeLLMAPI status, kept across the periodic re-render
+async function loadRouter(id) {
+  try { ROUTER[id] = await api(`keys/${id}/router`); } catch (e) { ROUTER[id] = { ok: false, error: e.message }; }
+  const box = document.querySelector(`.key[data-id="${id}"] .router-box`);
+  if (box) box.innerHTML = renderRouter(ROUTER[id]);
 }
 function renderKeyTable() {
   const box = $("#keyTable"); if (!box) return;
   const keys = [...(STATE.keys || [])].sort((a, b) => (a.priority || 0) - (b.priority || 0));
   if (!keys.length) { box.innerHTML = `<div class="card muted">Ключей пока нет.</div>`; return; }
   box.innerHTML = `<div class="keys">` + keys.map((k, i) => {
-    const used = (k.usage?.input || 0) + (k.usage?.output || 0) - (k.usage?.budget_base || 0);
+    const used = k.month_tokens || 0;
+    const refill = new Date(k.refill_at * 1000).toLocaleDateString("ru-RU");
+    const pct = k.budget ? Math.min(100, Math.round(used / k.budget * 100)) : 0;
+    const strategies = k.provider === "freellmapi" ? ["auto:smart", "auto", "auto:reliable", "auto:balanced", "auto:fast"] : [];
+    if (strategies.length) k.models = [...strategies, ...(k.models || []).filter((m) => !strategies.includes(m))];
     const models = (k.models || []).length ? `<select data-f="model">${[k.model, ...k.models.filter((m) => m !== k.model)].map((m) => `<option ${m === k.model ? "selected" : ""}>${esc(m)}</option>`).join("")}</select>`
       : `<input data-f="model" value="${esc(k.model)}" placeholder="модель">`;
     return `<div class="key card" data-id="${k.id}">
@@ -307,16 +334,22 @@ function renderKeyTable() {
         <span class="spacer"></span>${statusChip(k.status, KEYSTATUS)}${k.cooldown_left ? `<span class="muted small">ещё ${k.cooldown_left} с</span>` : ""}</div>
       <div class="key-b">
         ${k.kind === "fal" ? `<span class="muted">для ассетов (um fal)</span>` : `<label>Модель ${models}</label>`}
-        <label>Лимит токенов <input data-f="budget" type="number" min="0" step="100000" value="${k.budget || ""}" placeholder="без лимита"></label>
-        <div class="usage">${fmtN(k.usage?.input)} вход · ${fmtN(k.usage?.output)} выход · ${k.usage?.requests || 0} запросов · ${k.usage?.errors || 0} ошибок${k.budget ? ` · израсходовано ${Math.min(100, Math.round(used / k.budget * 100))}%` : ""}</div>
+        <label>Лимит токенов в месяц <input data-f="budget" type="number" min="0" step="1000000" value="${k.budget || ""}" placeholder="без лимита"></label>
+        <div class="usage">
+          <div>В этом месяце: <b>${fmtN(used)}</b>${k.budget ? ` из ${fmtN(k.budget)}` : ""} токенов · ${k.month_requests || 0} запросов</div>
+          ${k.budget ? `<div class="meter ${pct >= 100 ? "full" : pct >= 80 ? "high" : ""}"><span style="width:${pct}%"></span></div>
+          <div class="small">${pct >= 100 ? "исчерпан — " : ""}пополнится ${esc(refill)}</div>` : ""}
+          <div class="small">всего: ${fmtN(k.usage?.input)} вход · ${fmtN(k.usage?.output)} выход · ${k.usage?.errors || 0} ошибок</div>
+        </div>
       </div>
       ${k.last_error ? `<div class="small err-t">${esc(k.last_error)}</div>` : ""}
       <div class="row">
         <button class="btn" data-a="up" ${i === 0 ? "disabled" : ""}>↑</button><button class="btn" data-a="down" ${i === keys.length - 1 ? "disabled" : ""}>↓</button>
         <button class="btn" data-a="check">Проверить и включить</button>
+        ${k.provider === "freellmapi" ? `<button class="btn" data-a="router">Состояние роутера</button>` : ""}
         ${k.status === "disabled" ? `<button class="btn" data-a="on">Включить</button>` : `<button class="btn" data-a="off">Выключить</button>`}
         <button class="btn danger" data-a="del">Удалить</button>
-      </div></div>`;
+      </div><div class="router-box">${ROUTER[k.id] ? renderRouter(ROUTER[k.id]) : ""}</div></div>`;
   }).join("") + `</div>`;
   box.onchange = async (e) => {
     const el = e.target.closest("[data-f]"); if (!el) return;
@@ -330,6 +363,7 @@ function renderKeyTable() {
     b.disabled = true;
     try {
       let r;
+      if (a === "router") { await loadRouter(id); b.disabled = false; return; }
       if (a === "check") r = await api(`keys/${id}/check`, { method: "POST" });
       else if (a === "on" || a === "off") r = await api("keys/" + id, { method: "PATCH", body: { enabled: a === "on" } });
       else if (a === "del") { if (!confirm("Удалить ключ?")) { b.disabled = false; return; } r = await api("keys/" + id, { method: "DELETE" }); }
@@ -342,6 +376,21 @@ function renderKeyTable() {
       STATE.keys = r.keys; renderKeyTable(); refreshState();
     } catch (err) { alert(err.message); b.disabled = false; }
   };
+}
+
+function renderRouter(st) {
+  if (!st.ok) return `<div class="small err-t">Роутер не ответил: ${esc(st.error)}</div>`;
+  const c = st.counts || {};
+  const prov = (st.providers || []).map((p) => `<span class="chip ${p.status === "healthy" ? "ok" : p.status === "rate_limited" ? "warn" : p.status === "invalid" ? "err" : "idle"}"
+    title="${esc(p.resume_at ? "до " + new Date(p.resume_at).toLocaleString("ru-RU") : p.last_error || "")}">${esc(p.name)}</span>`).join(" ");
+  const pools = (st.pools || []).filter((x) => x.limit).map((x) => {
+    const pct = x.remaining_pct ?? (x.limit ? Math.round((x.remaining / x.limit) * 100) : 0);
+    return `<div class="pool"><span>${esc(x.platform)}${x.pool && x.pool !== x.platform ? " · " + esc(x.pool) : ""}</span>
+      <div class="meter ${x.low_balance ? "full" : ""}"><span style="width:${pct}%"></span></div>
+      <span class="small muted">${fmtN(x.remaining)} / ${fmtN(x.limit)}${x.reset_at ? " · сброс " + new Date(x.reset_at).toLocaleString("ru-RU") : ""}</span></div>`;
+  }).join("");
+  return `<div class="small">Провайдеры: ${c.healthy || 0} в работе · ${c.rate_limited || 0} на паузе · ${c.invalid || 0} с ошибкой</div>
+    <div class="row" style="margin:6px 0">${prov || '<span class="muted small">в панели FreeLLMAPI ещё нет ключей провайдеров</span>'}</div>${pools}`;
 }
 
 // --------------------------------------------------------------------------- games + knowledge base

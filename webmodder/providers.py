@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -222,12 +223,16 @@ def _openai_call(key: dict, system: str, messages: list[dict], tools: list[dict]
         headers = {"Content-Type": "application/json", "User-Agent": "web-modder"}
         if key.get("secret"):
             headers["Authorization"] = "Bearer " + key["secret"]
+        if provider == "freellmapi":
+            # tell the router these are tool-using coding turns, so it leans to stronger models
+            headers["X-FreeLLM-Task-Type"] = "code"
         if provider == "openrouter":
             headers.update({"HTTP-Referer": "https://github.com/rehan-remade/universal-modder", "X-Title": "web-modder"})
         req = urllib.request.Request(base + "/chat/completions", data=json.dumps(body).encode(), headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=900) as r:
                 js = json.loads(r.read().decode("utf-8", "replace"))
+                routed = urllib.parse.unquote(r.headers.get("X-Routed-Via") or "")
             break
         except urllib.error.HTTPError as e:
             text = e.read().decode("utf-8", "replace")[:1500]
@@ -271,7 +276,7 @@ def _openai_call(key: dict, system: str, messages: list[dict], tools: list[dict]
     if fr == "content_filter" and not blocks:
         stop = "refusal"
     u = js.get("usage") or {}
-    return {"blocks": blocks, "stop": stop, "model": js.get("model", key["model"]),
+    return {"blocks": blocks, "stop": stop, "model": routed or js.get("model", key["model"]),
             "usage": {"input": u.get("prompt_tokens", 0) or 0, "output": u.get("completion_tokens", 0) or 0}}
 
 

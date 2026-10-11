@@ -31,6 +31,7 @@ class Fake:
 
     def __init__(self):
         self.calls = []
+        self.headers = []
         self.script = []
 
     def start(self):
@@ -51,20 +52,31 @@ class Fake:
                 self.wfile.write(b)
 
             def do_GET(self):
+                if self.path.endswith("/providers"):
+                    return self._send(200, {"providers": [{"platform": "groq", "name": "Groq", "status": "healthy", "keys": 2}],
+                                            "counts": {"healthy": 1}})
+                if self.path.endswith("/quota-forecast"):
+                    return self._send(200, {"pools": [{"platform": "groq", "pool": "groq", "limit": 1000, "remaining": 400,
+                                                       "remaining_pct": 40, "low_balance": False}]})
                 self._send(200, {"data": [{"id": "fake-model"}]})
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 key = self.headers.get("Authorization", "").removeprefix("Bearer ")
                 fake.calls.append((key, body))
+                fake.headers.append(dict(self.headers))
+                if key == "freellmapi-capped":
+                    return self._send(429, {"error": {"code": "quota_exceeded", "message": "Monthly token cap reached"}},
+                                      {"Retry-After": "86400"})
                 if key == "rl":
                     return self._send(429, {"error": {"message": "Rate limit reached"}}, {"Retry-After": "60"})
                 if key == "broke":
                     return self._send(429, {"error": {"message": "You exceeded your current quota", "type": "insufficient_quota"}})
                 reply = fake.script.pop(0) if fake.script else {"content": "Готово."}
-                self._send(200, {"model": "fake-model", "choices": [{"message": reply,
+                self._send(200, {"model": "auto", "choices": [{"message": reply,
                                  "finish_reason": "tool_calls" if reply.get("tool_calls") else "stop"}],
-                                 "usage": {"prompt_tokens": 10, "completion_tokens": 5}})
+                                 "usage": {"prompt_tokens": 10, "completion_tokens": 5}},
+                           {"X-Routed-Via": "groq/llama-3.3-70b"})
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
@@ -109,10 +121,11 @@ def test_pool_failover_and_topup(fake):
     # pasting the same key again tops it up: re-checked and active again
     pool.add("good", provider="custom", base=base)
     assert pool.acquire()["id"] == b["id"]
-    # a token budget: exhausted -> parked, raised -> back
+    # a monthly token limit: exhausted -> parked until the 1st, raised -> back at once
     pool.update(b["id"], budget=100)
     pool.success(b, {"input": 80, "output": 30})
     assert pool.acquire(exclude={a["id"]}) is None
+    assert b["status"] == "cooldown" and b["budget_hit"] and "пополнится" in b["last_error"]
     pool.update(b["id"], budget=1000)
     assert pool.acquire(exclude={a["id"]})["id"] == b["id"]
     # persisted, and secrets never leave public()
@@ -284,3 +297,59 @@ def test_http_api(fake):
         assert app.token not in login
     finally:
         httpd.shutdown()
+
+
+def test_monthly_limit_refills_itself():
+    from webmodder.keys import KeyPool, month_key, next_month_start
+
+    pool = KeyPool()
+    k = pool.add("sk-test", provider="openai", probe=False)
+    pool.update(k["id"], budget=1000)
+    pool.success(k, {"input": 900, "output": 200})
+    assert pool.acquire() is None and k["cooldown_until"] == next_month_start()
+    assert next_month_start() > time.time() and time.gmtime(next_month_start()).tm_mday == 1
+    # the calendar turns: the counter resets and the key is back without anyone touching it
+    k["usage"]["month"] = "2000-01"
+    assert pool.acquire()["id"] == k["id"]
+    assert k["usage"]["month"] == month_key() and k["usage"]["month_tokens"] == 0
+    assert k["usage"]["input"] == 900  # lifetime totals are kept
+    # and it survives a restart in the parked state
+    pool.success(k, {"input": 2000, "output": 0})
+    assert pool.acquire() is None
+    assert KeyPool().acquire() is None
+
+
+def test_freellmapi_router(fake):
+    from webmodder import providers, tools
+    from webmodder.keys import KeyPool, detect
+
+    f, base = fake
+    origin = base.removesuffix("/v1")
+    assert detect("freellmapi-abc123") == ["freellmapi"]
+    pool = KeyPool()
+    single = pool.add("good", provider="custom", base=base)
+    router = pool.add("freellmapi-abc123", base=origin)  # origin without /v1 is fine
+    assert router["provider"] == "freellmapi" and router["base"] == base
+    assert router["model"] == "auto:smart"  # the router picks, not one pinned upstream model
+    assert pool.acquire()["id"] == router["id"]  # a router goes first
+    r = providers.complete(router, "sys", [{"role": "user", "content": [{"type": "text", "text": "hi"}]}], tools.DEFS)
+    assert r["model"] == "groq/llama-3.3-70b"
+    assert f.headers[-1].get("X-Freellm-Task-Type") == "code" and f.calls[-1][1]["model"] == "auto:smart"
+    # its monthly cap (429 quota_exceeded + Retry-After) parks the key for that long, then the single key takes over
+    capped = pool.add("freellmapi-capped", base=origin)
+    with pytest.raises(providers.ProviderError) as e:
+        providers.complete(capped, "sys", [{"role": "user", "content": [{"type": "text", "text": "hi"}]}], tools.DEFS)
+    assert e.value.kind == "quota" and e.value.retry_after == 86400
+    pool.failure(capped, e.value.kind, e.value.message, e.value.retry_after)
+    assert capped["cooldown_until"] - time.time() > 86000
+    assert pool.acquire(exclude={router["id"]})["id"] == single["id"]
+
+
+def test_router_status_endpoint(fake):
+    from webmodder.server import App
+
+    _, base = fake
+    app = App()
+    k = app.pool.add("freellmapi-abc123", base=base)
+    st = app.router_status(k)
+    assert st["ok"] and st["counts"]["healthy"] == 1 and st["pools"][0]["remaining"] == 400

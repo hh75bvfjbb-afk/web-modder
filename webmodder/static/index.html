@@ -116,6 +116,30 @@
       Агент использует ключи по приоритету и <b>не прерывается</b>: при лимите, перегрузке или окончании средств он
       переключается на следующий ключ, а если рабочих ключей нет — ждёт и сам продолжает, как только вы добавите ключ
       или пополните счёт.</p>
+    <form id="flForm" class="card form fl">
+      <div class="row"><b>Роутер FreeLLMAPI</b><span id="flState" class="muted small"></span></div>
+      <p class="muted small">Один ключ <code>freellmapi-…</code> вместо десятков: <a href="https://github.com/tashfeenahmed/freellmapi" target="_blank" rel="noopener">FreeLLMAPI</a>
+        собирает бесплатные лимиты 30+ провайдеров (Gemini, Groq, Cerebras, Mistral, OpenRouter…), сам переключается между ними
+        и держит месячные квоты. Установите его (<a href="https://github.com/tashfeenahmed/freellmapi/releases/latest" target="_blank" rel="noopener">установщик для Windows</a>
+        или <code>curl -fsSL https://freellmapi.co/install.sh | bash</code>), добавьте ключи провайдеров в его панели
+        (<a href="http://localhost:3001" target="_blank" rel="noopener">localhost:3001</a>) и вставьте сюда единый ключ со страницы Keys.</p>
+      <div class="grid3">
+        <label>Адрес <input name="base" value="http://localhost:3001"></label>
+        <label>Единый ключ <input name="secret" placeholder="freellmapi-…" autocomplete="off"></label>
+        <label>Выбор моделей
+          <select name="model">
+            <option value="auto:smart" selected>auto:smart — самые умные</option>
+            <option value="auto">auto — ваша цепочка</option>
+            <option value="auto:reliable">auto:reliable — самые надёжные</option>
+            <option value="auto:balanced">auto:balanced — баланс</option>
+            <option value="auto:fast">auto:fast — быстрые</option>
+          </select>
+        </label>
+      </div>
+      <label>Лимит токенов в месяц <span class="muted">(пусто — без лимита; пополняется сам 1-го числа)</span>
+        <input name="budget" type="number" min="0" step="1000000" placeholder="например 50000000"></label>
+      <div class="row"><button class="btn primary">Подключить FreeLLMAPI</button><span id="flMsg" class="muted"></span></div>
+    </form>
     <form id="keyForm" class="card form">
       <label>Ключи <span class="muted">(можно несколько — по одному в строке)</span>
         <textarea name="secret" rows="3" placeholder="sk-ant-…&#10;sk-or-…&#10;AIza…&#10;fal-ключ вида uuid:secret"></textarea>
@@ -127,15 +151,19 @@
           <label>Адрес API (для своего сервера) <input name="base" placeholder="http://localhost:11434/v1"></label>
           <label>Модель <input name="model" placeholder="по умолчанию — лучшая доступная"></label>
         </div>
-        <label>Название <input name="label" placeholder="например: рабочий ключ"></label>
+        <div class="grid2">
+          <label>Название <input name="label" placeholder="например: рабочий ключ"></label>
+          <label>Лимит токенов в месяц <input name="budget" type="number" min="0" step="1000000" placeholder="без лимита"></label>
+        </div>
       </details>
       <div class="row"><button class="btn primary">Добавить / пополнить</button><span id="keyMsg" class="muted"></span></div>
     </form>
     <div id="keyTable"></div>
     <div class="card muted small">
       <b>Как это работает.</b> Повторная вставка того же ключа = «пополнить»: ключ проверяется и снова включается.
-      «Лимит токенов» — ваш собственный бюджет на ключ: когда он израсходован, ключ отключается, а работа идёт на
-      следующем; увеличьте лимит, чтобы пополнить. Ключ, у которого закончились деньги, ставится на паузу на 30 минут
+      «Лимит токенов в месяц» — ваш бюджет на ключ: когда он израсходован, ключ встаёт на паузу до 1-го числа
+      следующего месяца (UTC) и тогда <b>пополняется сам</b>, а работа тем временем идёт на других ключах. Увеличьте
+      лимит — и ключ пополнится сразу. Ключ, у которого закончились деньги, ставится на паузу на 30 минут
       и пробуется снова сам — пополните счёт у провайдера, и агент подхватит его без перезапуска. Ключи хранятся
       только на этом ПК (<code>~/.web-modder/keys.json</code>) и не попадают в команды агента.
     </div>
