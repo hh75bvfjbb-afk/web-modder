@@ -357,6 +357,9 @@ class KeyPool:
                 # provider's site is picked up without touching the app
                 # FreeLLMAPI's monthly cap answers with Retry-After = seconds to the next month: honour it
                 k["status"], k["cooldown_until"] = "cooldown", time.time() + (retry_after or QUOTA_COOLDOWN)
+            elif k["provider"] == "freellmapi" and kind in ("overloaded", "network"):
+                # a router's 5xx is one upstream failing; the next request is routed elsewhere, so only a short pause
+                k["status"], k["cooldown_until"] = "cooldown", time.time() + (retry_after or min(3 * k["fails"], 20))
             else:
                 base = retry_after if retry_after else COOLDOWN_MIN * (2 ** min(k["fails"] - 1, 6))
                 if kind == "network":

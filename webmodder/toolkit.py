@@ -133,7 +133,9 @@ def bin_dir() -> Path:
     py = sys.executable
     sh = d / "um"
     if FROZEN:
-        sh.write_text(f'#!/usr/bin/env bash\nexec "{py}" --um "$@"\n')
+        sh.write_text(f'#!/usr/bin/env bash\nexec "{py.replace(chr(92), "/")}" --um "$@"\n', newline="\n")
+    elif os.name == "nt":  # Git Bash: PYTHONPATH is already in the environment in Windows form
+        sh.write_text(f'#!/usr/bin/env bash\nexec "{py.replace(chr(92), "/")}" -m um "$@"\n', newline="\n")
     else:
         sh.write_text(f'#!/usr/bin/env bash\nPYTHONPATH="{toolkit_dir()}${{PYTHONPATH:+:$PYTHONPATH}}" exec "{py}" -m um "$@"\n')
     try:
@@ -153,6 +155,12 @@ def env(fal_key: str | None = None) -> dict:
     e["PYTHONPATH"] = str(toolkit_dir()) + (os.pathsep + e["PYTHONPATH"] if e.get("PYTHONPATH") else "")
     e["PYTHONIOENCODING"] = "utf-8"
     e["UM_NO_UV"] = "1"
+    # English compiler/msbuild messages: models know them far better than localized ones
+    e.setdefault("DOTNET_CLI_UI_LANGUAGE", "en")
+    e.setdefault("VSLANG", "1033")
+    e.setdefault("DOTNET_NOLOGO", "1")
+    # Git Bash rewrites args that start with "/" into paths; msbuild switches must survive
+    e.setdefault("MSYS2_ARG_CONV_EXCL", "/p:;/t:;/v:;/m:;/m;/nologo;/restore;/property:;/target:")
     for k in [k for k in e if k.endswith("_API_KEY") or k in ("FAL_KEY", "ANTHROPIC_AUTH_TOKEN")]:
         e.pop(k)  # the agent's shell never sees the model keys
     if fal_key:

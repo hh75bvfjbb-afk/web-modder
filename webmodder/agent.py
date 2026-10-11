@@ -42,6 +42,7 @@ their real game, using the toolkit's skills, its `um` CLI and the shared knowled
 
 # Environment
 - Machine: {platform.system()} {platform.release()} ({platform.machine()}); your shell tool runs {tools.shell_name()}.
+  {tools.shell_hint()}
 - Session folder (your cwd; put the mod, MODLOG.md and generated assets here): {workdir}
 - universal-modder checkout: {toolkit.toolkit_dir()} (skills/, knowledge/, examples/ live there; read them with
   read_skill). `um` is on PATH and also available as the `um` tool.

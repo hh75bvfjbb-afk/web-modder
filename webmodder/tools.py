@@ -25,16 +25,100 @@ MAX_OUT = 24000
 IS_WIN = os.name == "nt"
 
 
+def git_bash() -> str | None:
+    """Git for Windows' bash.exe (never System32\\bash.exe, which is WSL and sees a different filesystem)."""
+    cands = []
+    git = shutil.which("git")
+    if git:  # ...\Git\cmd\git.exe -> ...\Git\bin\bash.exe
+        cands.append(Path(git).resolve().parent.parent / "bin" / "bash.exe")
+    for var in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
+        if os.environ.get(var):
+            cands.append(Path(os.environ[var]) / "Git" / "bin" / "bash.exe")
+    if os.environ.get("LOCALAPPDATA"):
+        cands.append(Path(os.environ["LOCALAPPDATA"]) / "Programs" / "Git" / "bin" / "bash.exe")
+    return next((str(c) for c in cands if c.is_file()), None)
+
+
+_SHELL: list = []
+
+
+def shell() -> tuple[str, str]:
+    """(kind, executable). Models write bash far more reliably than PowerShell, so on Windows Git Bash wins when it
+    is installed; then PowerShell 7 (pwsh: knows `&&`, UTF-8 by default); then Windows PowerShell 5.1.
+    WM_SHELL=bash|pwsh|powershell forces one."""
+    if not _SHELL:
+        force = os.environ.get("WM_SHELL", "").lower()
+        if not IS_WIN:
+            _SHELL.append(("bash", shutil.which("bash")) if shutil.which("bash") else ("sh", "sh"))
+        else:
+            gb, pw = git_bash(), shutil.which("pwsh")
+            if gb and force in ("", "bash"):
+                _SHELL.append(("bash", gb))
+            elif pw and force in ("", "pwsh"):
+                _SHELL.append(("pwsh", pw))
+            else:
+                _SHELL.append(("powershell", "powershell"))
+    return _SHELL[0]
+
+
 def shell_name() -> str:
+    kind = shell()[0]
+    return {"bash": "Git Bash (bash on Windows)" if IS_WIN else "bash", "pwsh": "PowerShell 7",
+            "powershell": "Windows PowerShell 5.1"}.get(kind, kind)
+
+
+# PowerShell writes in the console's OEM code page (cp866 on Russian Windows) unless told otherwise
+_PS_PREFIX = ("try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}; $OutputEncoding = [Text.Encoding]::UTF8; "
+              "$ProgressPreference = 'SilentlyContinue'; ")
+
+
+def shell_argv(command: str) -> list[str]:
+    kind, exe = shell()
+    if kind in ("powershell", "pwsh"):
+        return [exe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", _PS_PREFIX + command]
+    return [exe, "-c", command]
+
+
+def shell_hint() -> str:
+    kind = shell()[0]
+    if kind == "powershell":
+        return ("This is Windows PowerShell 5.1, NOT bash: no `&&`/`||` (use `;` or `if ($?) { ... }`), no heredocs "
+                "(`<<`), no `ls -la`/`cat >`/`export`/`rm -rf` (use Get-ChildItem -Force, Remove-Item -Recurse -Force, "
+                "$env:NAME='x'). Create and change files only with write_file/edit_file.")
+    if kind == "pwsh":
+        return ("This is PowerShell 7, NOT bash: no heredocs (`<<`), no `ls -la`/`cat >`/`export` (use Get-ChildItem "
+                "-Force, $env:NAME='x'). Create and change files only with write_file/edit_file.")
     if IS_WIN:
-        return "powershell"
-    return "bash" if shutil.which("bash") else "sh"
+        return ("This is Git Bash on Windows: bash syntax works; write Windows paths with forward slashes in quotes "
+                "(\"C:/Program Files (x86)/Steam/...\") or as /c/...; Windows programs (dotnet, git, um) run directly. "
+                "Prefer write_file/edit_file over heredocs for files.")
+    return "Prefer write_file/edit_file over heredocs for files."
+
+
+_BASHISM = re.compile(r"<<|&&|\bls\s+-\w|\bcat\s+>|\bexport\s+\w+=|\brm\s+-\w|\bgrep\b|\bhead\b|\btail\b|\bwhich\b")
+
+
+def decode(raw: bytes) -> str:
+    """UTF-8, or the Windows OEM/ANSI code page for tools that ignore UTF-8 (cmd, old PowerShell, msbuild)."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    if IS_WIN:
+        import ctypes
+
+        for cp in (ctypes.windll.kernel32.GetOEMCP(), ctypes.windll.kernel32.GetACP()):
+            try:
+                return raw.decode(f"cp{cp}")
+            except (UnicodeDecodeError, LookupError):
+                continue
+    return raw.decode("utf-8", "replace")
 
 
 DEFS = [
     {"name": "shell",
-     "description": f"Run a command in {shell_name()} in the session's working folder. `um` (the universal-modder CLI) "
-                    "is on PATH. Output is truncated to the first and last ~12k characters. Use background=true for "
+     "description": f"Run a command in {shell_name()} in the session's working folder. {shell_hint()} "
+                    "`um` (the universal-modder CLI) is on PATH. Output is truncated to the first and last ~12k characters. Use background=true for "
                     "programs that keep running (a game, a server, a recorder): it returns the PID and a log path.",
      "parameters": {"type": "object", "properties": {
          "command": {"type": "string"},
@@ -166,6 +250,7 @@ class Runner:
     # ------------------------------------------------------------------ processes
     def _exec(self, argv: list[str] | str, timeout: int, cwd: Path, use_shell: bool) -> tuple[str, list, bool]:
         timeout = max(5, min(int(timeout or 600), 7200))
+        cmd_text = argv if isinstance(argv, str) else ""
         env = toolkit.env(self.fal_key_fn())
         kw = {"cwd": str(cwd), "env": env, "stdout": subprocess.PIPE, "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL}
         if IS_WIN:
@@ -173,15 +258,14 @@ class Runner:
         else:
             kw["start_new_session"] = True
         if use_shell:
-            argv = (["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", argv] if IS_WIN
-                    else [shell_name(), "-c", argv])
+            argv = shell_argv(argv)
         proc = subprocess.Popen(argv, **kw)
         chunks: list[str] = []
         last_emit = [time.time()]
 
         def reader():
             for raw in iter(proc.stdout.readline, b""):
-                line = raw.decode("utf-8", "replace")
+                line = decode(raw)
                 chunks.append(line)
                 if time.time() - last_emit[0] > 0.7:
                     last_emit[0] = time.time()
@@ -203,6 +287,8 @@ class Runner:
         out = "".join(chunks)
         code = proc.returncode
         tail = f"\n[код выхода {code}]" + (f" [{killed}]" if killed else "")
+        if use_shell and code and shell()[0] in ("powershell", "pwsh") and _BASHISM.search(cmd_text):
+            tail += "\n[web-modder: " + shell_hint() + "]"
         return _clip(out) + tail, [], bool(killed) or code != 0
 
     @staticmethod
@@ -222,7 +308,7 @@ class Runner:
             logp = self.workdir / ".wm" / f"bg-{int(time.time())}-{self.bg_count}.log"
             logp.parent.mkdir(parents=True, exist_ok=True)
             f = open(logp, "wb")
-            argv = (["powershell", "-NoProfile", "-Command", command] if IS_WIN else [shell_name(), "-c", command])
+            argv = shell_argv(command)
             kw = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if IS_WIN else {"start_new_session": True}
             p = subprocess.Popen(argv, cwd=str(wd), env=toolkit.env(self.fal_key_fn()), stdout=f, stderr=subprocess.STDOUT,
                                  stdin=subprocess.DEVNULL, **kw)
@@ -238,7 +324,7 @@ class Runner:
         data = p.read_bytes()
         if b"\0" in data[:4096]:
             return f"{p}: двоичный файл, {len(data)} байт", [], True
-        lines = data.decode("utf-8", "replace").splitlines()
+        lines = decode(data).splitlines()
         offset = max(1, int(offset or 1))
         sel = lines[offset - 1: offset - 1 + max(1, int(limit or 1500))]
         body = "\n".join(f"{i:>6}\t{l}" for i, l in enumerate(sel, offset))

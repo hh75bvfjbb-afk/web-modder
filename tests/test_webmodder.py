@@ -353,3 +353,42 @@ def test_router_status_endpoint(fake):
     k = app.pool.add("freellmapi-abc123", base=base)
     st = app.router_status(k)
     assert st["ok"] and st["counts"]["healthy"] == 1 and st["pools"][0]["remaining"] == 400
+
+
+# ------------------------------------------------------------------ shells (real Windows checks run in CI)
+def test_freellmapi_5xx_is_a_short_pause():
+    from webmodder.keys import KeyPool
+
+    pool = KeyPool()
+    k = pool.add("freellmapi-x", base="http://127.0.0.1:9/v1", probe=False)
+    pool.failure(k, "overloaded", "HTTP 502 provider error")
+    assert 0 < k["cooldown_until"] - time.time() <= 5
+
+
+def test_shell_runs_and_decodes(tmp_path):
+    from webmodder import tools
+
+    r = tools.Runner(tmp_path, lambda: None)
+    out, _, err = r.t_shell("echo Привет-мир")
+    assert not err and "Привет-мир" in out and "�" not in out
+    assert tools.decode("ёжик".encode()) == "ёжик"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows only")
+@pytest.mark.parametrize("kind", ["powershell", "bash"])
+def test_windows_shells_print_cyrillic(tmp_path, monkeypatch, kind):
+    from webmodder import tools
+
+    exe = "powershell" if kind == "powershell" else tools.git_bash()
+    if not exe:
+        pytest.skip("no Git Bash")
+    monkeypatch.setattr(tools, "_SHELL", [(kind, exe)])
+    r = tools.Runner(tmp_path, lambda: None)
+    out, _, err = r.t_shell("echo Привет-мир")
+    assert not err and "Привет-мир" in out and "�" not in out, out
+    if kind == "powershell":
+        out, _, err = r.t_shell("ls -la")
+        assert err and "PowerShell" in out  # the hint that this is not bash
+    else:
+        out, _, err = r.t_shell("um --version")  # the um launcher works from Git Bash
+        assert not err and "universal-modder" in out, out
