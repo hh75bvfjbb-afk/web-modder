@@ -7,7 +7,8 @@ Tuned for a mid-range PC (an 8 GB GPU such as an RTX 4060):
     texture         as image, then `um sprite seamless`
     rmbg            local ISNet (onnxruntime, CPU is enough)
     upscale         local Real-ESRGAN (ncnn/Vulkan: any GPU)
-    sfx             Freesound (free API key, real CC recordings) -> ComfyUI Stable Audio Open -> fal
+    sfx             Freesound (only with its key) -> Openverse (no key, CC recordings) -> ComfyUI Stable Audio Open
+                    -> fal -> the built-in sfxr retro synthesizer (always works: no key, no network)
     music           ComfyUI ACE-Step -> fal
     voice           edge-tts (free, Russian voices) -> FreeLLMAPI speech -> fal
     model3d         ComfyUI Hunyuan3D-2 mini (shape) -> fal (textured)
@@ -477,6 +478,35 @@ def freesound(ctx: Ctx, query: str, seconds: float | None) -> tuple[str, bytes, 
     return url.rsplit(".", 1)[-1], data, best
 
 
+def openverse(ctx: Ctx, query: str, seconds: float | None) -> tuple[str, bytes, dict]:
+    """Openverse (WordPress): an index of openly licensed audio, Freesound and Wikimedia among its sources.
+    No key; anonymous searches are rate-limited (a few per hour), so a 429 just moves on to the next source."""
+    params = {"q": query, "license": "cc0,pdm,by", "page_size": 20, "mature": "false"}
+    raw, _ = _http("https://api.openverse.org/v1/audio/?" + urllib.parse.urlencode(params), timeout=40)
+    results = json.loads(raw).get("results") or []
+    longest = max(1.0, float(seconds or 8)) * 1.5 * 1000  # Openverse durations are in ms
+
+    def ok(a):
+        d = a.get("duration")
+        return a.get("url") and (d is None or d <= longest) and (a.get("filetype") or "").lower() in ("", "mp3", "ogg", "wav", "flac", "oga")
+
+    cands = [a for a in results if ok(a)]
+    if not cands:
+        raise Skip(f"в Openverse ничего подходящего по «{query}» — попробуй английские слова")
+    cands.sort(key=lambda a: (0 if a.get("license") in ("cc0", "pdm") else 1, 0 if a.get("category") == "sound_effect" else 1))
+    for a in cands[:3]:
+        try:
+            data = _http(a["url"], timeout=120)[0]
+        except Skip:
+            continue
+        ext = (a.get("filetype") or a["url"].rsplit(".", 1)[-1].split("?")[0] or "mp3").lower()[:4]
+        info = {"name": a.get("title"), "username": a.get("creator"), "url": a.get("foreign_landing_url") or a["url"],
+                "license": f"{a.get('license', '').upper()} {a.get('license_version') or ''}".strip(), "id": a.get("id"),
+                "via": f"Openverse/{a.get('source') or a.get('provider')}"}
+        return ext, data, info
+    raise Skip("Openverse: не удалось скачать найденные файлы")
+
+
 EDGE_VOICES = {"ru-m": "ru-RU-DmitryNeural", "ru-f": "ru-RU-SvetlanaNeural", "en-m": "en-US-GuyNeural",
                "en-f": "en-US-JennyNeural"}
 
@@ -627,10 +657,21 @@ def make(ctx: Ctx, recipe: str, prompt: str = "", input: str | None = None, name
     if recipe == "sfx":
         meta = {}
 
-        def fs():
-            ext, data, info = freesound(ctx, prompt, seconds)
-            meta.update(info)
-            p = _unique(o, stem, "." + ext)
+        def fetched(fn):
+            def run():
+                ext, data, info = fn(ctx, prompt, seconds)
+                meta.update(info)
+                p = _unique(o, stem, "." + ext)
+                p.write_bytes(data)
+                return p
+            return run
+
+        def retro():
+            from webmodder import sfxr
+
+            data, info = sfxr.make_wav(prompt, seconds)
+            meta.update(retro=info["preset"])
+            p = _unique(o, stem, ".wav")
             p.write_bytes(data)
             return p
 
@@ -640,19 +681,35 @@ def make(ctx: Ctx, recipe: str, prompt: str = "", input: str | None = None, name
             p.write_bytes(data)
             return p
 
-        steps = ([("Freesound", fs)] if want("freesound") else []) + ([("ComfyUI Stable Audio", sa)] if want("comfy") else [])
+        steps = []
+        if source == "sfxr":  # a retro game: skip straight to the synthesizer
+            steps.append(("ретро-синтезатор", retro))
+        if want("freesound"):
+            steps.append(("Freesound", fetched(freesound)))
+        if want("openverse"):
+            steps.append(("Openverse", fetched(openverse)))
+        if want("comfy"):
+            steps.append(("ComfyUI Stable Audio", sa))
         if want("fal"):
             steps.append(fal(["sfx", prompt] + (["--seconds", str(seconds)] if seconds else []), ".mp3"))
+        if source == "auto":
+            steps.append(("ретро-синтезатор", retro))  # always works: no key, no network
         src, res, why = _chain(ctx, steps)
         res = _ffmpeg_convert(res, format or "")
         rec = {"recipe": "sfx", "source": src, "prompt": prompt, "files": [str(res)]}
+        if meta.get("retro"):
+            rec["preset"] = meta.pop("retro")
         if meta:
-            rec.update(freesound_id=meta.get("id"), license=meta.get("license"), author=meta.get("username"), url=meta.get("url"))
+            rec.update(sound_id=meta.get("id"), license=meta.get("license"), author=meta.get("username"), url=meta.get("url"),
+                       via=meta.get("via", "Freesound"))
             with open(o / "CREDITS.md", "a", encoding="utf-8") as f:
                 f.write(f"- {res.name}: \"{meta.get('name')}\" by {meta.get('username')} ({meta.get('url')}), "
                         f"license {meta.get('license')}\n")
         _record(o, **rec)
         note = f"лицензия: {meta.get('license')} — автор {meta.get('username')}, записано в CREDITS.md" if meta else ""
+        if src == "ретро-синтезатор":
+            note = (f"ретро-звук (sfxr, заготовка «{rec.get('preset')}»), свободен от лицензий. Для реалистичной игры лучше "
+                    "запусти ComfyUI со Stable Audio или повтори позже (Openverse ограничивает частоту поиска)")
         return {"files": [str(res)], "source": src, "skipped": why, "note": note}
 
     if recipe == "music":
@@ -741,6 +798,8 @@ def status(ctx: Ctx) -> dict:
     return {
         "freellmapi": bool(ctx.key("freellmapi")),
         "freesound": bool(ctx.key("freesound")),
+        "openverse": True,  # no key needed
+        "sfxr": True,
         "fal": bool(ctx.key("fal")),
         "edge_tts": have("edge_tts"),
         "onnxruntime": have("onnxruntime"),

@@ -108,7 +108,8 @@ pip install -r requirements.txt && python run.py
 
 Инструмент агента `make_asset` (`webmodder/assets.py`) делает спрайты, текстуры, звуки, музыку, голос, 3D и
 видео, перебирая бесплатные источники: FreeLLMAPI (картинки, речь, видео), локальный ComfyUI (SDXL, Stable Audio
-Open, ACE-Step 1.5, Hunyuan3D-2 — схемы взяты из официальных примеров и шаблонов ComfyUI), Freesound, edge-tts,
+Open, ACE-Step 1.5, Hunyuan3D-2 — схемы взяты из официальных примеров и шаблонов ComfyUI), Openverse
+(звуки без ключа), встроенный ретро-синтезатор звуков (порт sfxr), по желанию Freesound, edge-tts,
 локальные ISNet (удаление фона) и Real-ESRGAN (увеличение). fal — только запасной. Установка моделей под
 RTX 4060 — в [ИНСТРУКЦИЯ.md](ИНСТРУКЦИЯ.md), часть 5.
 

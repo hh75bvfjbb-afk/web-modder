@@ -170,11 +170,12 @@ DEFS = [
                     "which one it used. recipe: sprite (text -> sprite with a transparent background; size='64x64' "
                     "fits it exactly, pixel=true for pixel art), image, texture (seamless tile), rmbg (input image -> "
                     "transparent), upscale (input image, x4), sfx (sound effect; prompt in ENGLISH keywords, e.g. "
-                    "'laser shot', 'explosion debris'), music (prompt = style tags, optional lyrics, seconds), voice "
+                    "'laser shot', 'explosion debris'; source=sfxr gives instant retro 8-bit sounds for pixel-art games), music (prompt = style tags, optional lyrics, seconds), voice "
                     "(prompt = the line to say; voice ru-m/ru-f/en-m/en-f), model3d (input image -> GLB mesh), video, "
                     "status (what is available). Files land in assets/gen unless out is given. Free sources: "
                     "FreeLLMAPI images/speech/video, local ComfyUI (SDXL, Stable Audio, ACE-Step, Hunyuan3D), "
-                    "Freesound, edge-tts, local background removal and Real-ESRGAN; fal is only the last fallback.",
+                    "Openverse/Freesound sounds, a built-in sfxr retro synthesizer, edge-tts, local background removal and "
+                    "Real-ESRGAN; fal is only a fallback.",
      "parameters": {"type": "object", "properties": {
          "recipe": {"type": "string", "enum": ["status", "sprite", "image", "texture", "rmbg", "upscale", "sfx", "music",
                                                "voice", "model3d", "video"]},
@@ -184,7 +185,7 @@ DEFS = [
          "pixel": {"type": "boolean"}, "colors": {"type": "integer"},
          "seconds": {"type": "number"}, "voice": {"type": "string"}, "lyrics": {"type": "string"},
          "format": {"type": "string", "description": "audio format to convert to (wav/ogg/mp3) when ffmpeg is installed"},
-         "source": {"type": "string", "description": "force a source: auto (default), freellmapi, comfy, freesound, edge, fal"}},
+         "source": {"type": "string", "description": "force a source: auto (default), freellmapi, comfy, freesound, openverse, sfxr, edge, fal"}},
          "required": ["recipe"]}},
     {"name": "ask_user",
      "description": "Ask the user a question and wait for the answer: confirm ownership/offline play, choose between "

@@ -497,3 +497,65 @@ def test_make_asset_tool_is_free_to_call(tmp_path):
     from webmodder.tools import needs_approval
 
     assert not needs_approval("make_asset", {"recipe": "sprite"}, "smart", tmp_path)
+
+
+def test_sfx_without_any_keys(tmp_path, monkeypatch):
+    """No Freesound key, Openverse rate-limited, no ComfyUI, no fal: the retro synthesizer still makes a sound."""
+    import wave
+
+    from webmodder import assets, sfxr
+    from webmodder.keys import KeyPool
+
+    calls = []
+
+    def limited(ctx, q, s):
+        calls.append(q)
+        raise assets.Skip("HTTP 429: throttled")
+
+    monkeypatch.setattr(assets, "openverse", limited)
+    monkeypatch.setattr(assets, "comfy_up", lambda: False)
+    ctx = assets.Ctx(tmp_path, KeyPool())
+    r = assets.make(ctx, "sfx", prompt="взрыв бомбы", seconds=1)
+    assert r["source"] == "ретро-синтезатор" and calls == ["взрыв бомбы"]
+    assert any("Openverse" in w for w in r["skipped"]) and any("Freesound" in w for w in r["skipped"])
+    with wave.open(r["files"][0]) as w:
+        assert w.getframerate() == 44100 and w.getnframes() > 1000
+    assert "explosion" in (tmp_path / "assets" / "gen" / "assets_manifest.jsonl").read_text(encoding="utf-8")
+    # forced retro, and every preset renders something audible
+    r = assets.make(ctx, "sfx", prompt="laser", source="sfxr")
+    assert r["source"] == "ретро-синтезатор" and not r["skipped"]
+    for preset in ("pickup", "laser", "explosion", "powerup", "hit", "jump", "blip"):
+        data, info = sfxr.make_wav("x", preset=preset, seed=7)
+        assert info["preset"] == preset and len(data) > 1000
+    assert sfxr.preset_for("coin pickup") == "pickup" and sfxr.preset_for("выстрел из лазера") == "laser"
+
+
+def test_openverse_parsing(tmp_path, monkeypatch):
+    from webmodder import assets
+    from webmodder.keys import KeyPool
+
+    resp = {"result_count": 3, "results": [
+        {"id": "a", "title": "long boom", "url": "https://x/long.mp3", "license": "by", "license_version": "4.0",
+         "creator": "c1", "source": "freesound", "duration": 120000, "filetype": "mp3", "foreign_landing_url": "https://f/1"},
+        {"id": "b", "title": "boom by", "url": "https://x/by.mp3", "license": "by", "license_version": "3.0",
+         "creator": "c2", "source": "freesound", "duration": 2000, "filetype": "mp3", "foreign_landing_url": "https://f/2"},
+        {"id": "c", "title": "boom cc0", "url": "https://x/cc0.ogg", "license": "cc0", "license_version": "1.0",
+         "creator": "c3", "source": "wikimedia_audio", "duration": 1500, "filetype": "ogg", "category": "sound_effect",
+         "foreign_landing_url": "https://f/3"}]}
+    seen = []
+
+    def fake_http(url, *a, **kw):
+        seen.append(url)
+        if "api.openverse.org" in url:
+            assert "license=cc0%2Cpdm%2Cby" in url
+            return json.dumps(resp).encode(), {}
+        return b"AUDIO:" + url.encode(), {}
+
+    monkeypatch.setattr(assets, "_http", fake_http)
+    ctx = assets.Ctx(tmp_path, KeyPool())
+    r = assets.make(ctx, "sfx", prompt="explosion", seconds=2, source="openverse")
+    assert r["source"] == "Openverse"
+    f = Path(r["files"][0])
+    assert f.suffix == ".ogg" and f.read_bytes() == b"AUDIO:https://x/cc0.ogg"  # cc0 first, the 120 s one filtered out
+    credits = (tmp_path / "assets" / "gen" / "CREDITS.md").read_text(encoding="utf-8")
+    assert "c3" in credits and "CC0 1.0" in credits and "https://f/3" in credits
