@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import html
+import json
 import io
 import os
 import re
@@ -164,6 +165,27 @@ DEFS = [
                     "required": ["path"]}},
     {"name": "fetch_url", "description": "GET a web page or API (modding wikis, GitHub, Nexus, loader releases); returns text.",
      "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}},
+    {"name": "make_asset",
+     "description": "Make a game asset for FREE (prefer this to `um fal`): it tries free sources in order and says "
+                    "which one it used. recipe: sprite (text -> sprite with a transparent background; size='64x64' "
+                    "fits it exactly, pixel=true for pixel art), image, texture (seamless tile), rmbg (input image -> "
+                    "transparent), upscale (input image, x4), sfx (sound effect; prompt in ENGLISH keywords, e.g. "
+                    "'laser shot', 'explosion debris'), music (prompt = style tags, optional lyrics, seconds), voice "
+                    "(prompt = the line to say; voice ru-m/ru-f/en-m/en-f), model3d (input image -> GLB mesh), video, "
+                    "status (what is available). Files land in assets/gen unless out is given. Free sources: "
+                    "FreeLLMAPI images/speech/video, local ComfyUI (SDXL, Stable Audio, ACE-Step, Hunyuan3D), "
+                    "Freesound, edge-tts, local background removal and Real-ESRGAN; fal is only the last fallback.",
+     "parameters": {"type": "object", "properties": {
+         "recipe": {"type": "string", "enum": ["status", "sprite", "image", "texture", "rmbg", "upscale", "sfx", "music",
+                                               "voice", "model3d", "video"]},
+         "prompt": {"type": "string"}, "input": {"type": "string", "description": "input file for rmbg/upscale/model3d"},
+         "name": {"type": "string", "description": "file stem"}, "out": {"type": "string"},
+         "size": {"type": "string", "description": "final sprite size WxH, or image size"},
+         "pixel": {"type": "boolean"}, "colors": {"type": "integer"},
+         "seconds": {"type": "number"}, "voice": {"type": "string"}, "lyrics": {"type": "string"},
+         "format": {"type": "string", "description": "audio format to convert to (wav/ogg/mp3) when ffmpeg is installed"},
+         "source": {"type": "string", "description": "force a source: auto (default), freellmapi, comfy, freesound, edge, fal"}},
+         "required": ["recipe"]}},
     {"name": "ask_user",
      "description": "Ask the user a question and wait for the answer: confirm ownership/offline play, choose between "
                     "routes, permission to install a loader, the game's path, anything only they know.",
@@ -180,7 +202,7 @@ _SAFE_SHELL = re.compile(r"^\s*(ls|dir|pwd|cat|type|head|tail|wc|file|stat|which
 
 
 def needs_approval(name: str, args: dict, mode: str, workdir: Path) -> bool:
-    if mode == "auto" or name in ("read_file", "list_dir", "read_skill", "view_image", "ask_user"):
+    if mode == "auto" or name in ("read_file", "list_dir", "read_skill", "view_image", "ask_user", "make_asset"):
         return False
     if mode == "ask":
         return True
@@ -226,9 +248,10 @@ def split_args(s: str) -> list[str]:
 class Runner:
     """Executes tool calls for one session."""
 
-    def __init__(self, workdir: Path, fal_key_fn, on_output=None, stop_flag=None):
+    def __init__(self, workdir: Path, fal_key_fn, on_output=None, stop_flag=None, pool=None):
         self.workdir = workdir
         self.fal_key_fn = fal_key_fn
+        self.pool = pool
         self.on_output = on_output or (lambda text: None)
         self.stop_flag = stop_flag or threading.Event()
         self.bg_count = 0
@@ -375,6 +398,35 @@ class Runner:
 
         walk(root, 0)
         return f"{root}\n" + "\n".join(out), [], False
+
+    def t_make_asset(self, recipe: str, **kw):
+        from webmodder import assets
+
+        log: list[str] = []
+
+        def note(msg):
+            log.append(msg)
+            self.on_output("\n".join(log)[-3000:])
+
+        ctx = assets.Ctx(self.workdir, self.pool, note, self.stop_flag)
+        kw = {k: v for k, v in kw.items() if k in ("prompt", "input", "name", "out", "size", "pixel", "colors", "seconds",
+                                                   "voice", "lyrics", "format", "source", "scale") and v not in (None, "")}
+        try:
+            res = assets.make(ctx, recipe, **kw)
+        except assets.AssetError as e:
+            return f"не получилось: {e}", [], True
+        if recipe == "status":
+            return json.dumps(res["status"], ensure_ascii=False, indent=1), [], False
+        lines = [f"готово ({res['source']}):"] + [f"  {f}" for f in res["files"]]
+        if res.get("note"):
+            lines.append(res["note"])
+        if res.get("skipped"):
+            lines.append("пропущены: " + "; ".join(res["skipped"]))
+        images = []
+        last = res["files"][-1]
+        if last.lower().endswith(".png"):  # let the model look at what it got
+            images = self.t_view_image(last, 512)[1]
+        return "\n".join(lines), images, False
 
     def t_read_skill(self, name: str, file: str | None = None):
         return _clip(toolkit.read_doc(name, file)), [], False

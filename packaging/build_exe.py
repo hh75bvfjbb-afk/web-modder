@@ -62,13 +62,15 @@ def main():
 
     tk = toolkit_snapshot()
     hidden = um_imports(tk) + ["numpy", "yaml", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFont", "PIL.ImageFilter",
-                                "PIL.ImageOps", "PIL.ImageChops", "PIL.ImageEnhance", "anthropic"]
+                                "PIL.ImageOps", "PIL.ImageChops", "PIL.ImageEnhance", "anthropic",
+                                "edge_tts", "aiohttp", "onnxruntime", "webmodder.assets"]
     sep = os.pathsep
     args = [str(ROOT / "run.py"), "--onefile", "--name", "WebModder", "--console", "--noconfirm",
             "--distpath", str(ROOT / "dist"), "--workpath", str(BUILD / "pyinstaller"), "--specpath", str(BUILD),
             "--add-data", f"{ROOT / 'webmodder' / 'static'}{sep}webmodder/static",
             "--add-data", f"{tk}{sep}universal-modder",
             "--collect-submodules", "anthropic", "--collect-submodules", "PIL",
+            "--collect-submodules", "edge_tts", "--collect-binaries", "onnxruntime",
             "--exclude-module", "tkinter", "--exclude-module", "pytest"]
     for h in hidden:
         args += ["--hidden-import", h]

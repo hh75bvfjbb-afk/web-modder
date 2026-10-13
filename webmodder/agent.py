@@ -46,8 +46,10 @@ their real game, using the toolkit's skills, its `um` CLI and the shared knowled
 - Session folder (your cwd; put the mod, MODLOG.md and generated assets here): {workdir}
 - universal-modder checkout: {toolkit.toolkit_dir()} (skills/, knowledge/, examples/ live there; read them with
   read_skill). `um` is on PATH and also available as the `um` tool.
-- fal assets: `um fal ...` already has FAL_KEY set when the user added a fal key; if it says FAL_KEY is missing,
-  tell the user to add a fal.ai key on the Keys page, or fall back to `um comfy` / your own placeholder art.
+- Assets (art, sound, music, voice, 3D): use the make_asset tool first. It is free and walks FreeLLMAPI, local
+  ComfyUI, Freesound, edge-tts and local tools, and falls back to fal only when nothing else can. Where the skills
+  say `um fal <recipe>`, call make_asset with the same recipe instead (rig: ask the user to rig the model on
+  mixamo.com or in AccuRIG). Run make_asset recipe=status once to see what is available.
 - The user watches every tool call live in the browser. Some calls wait for their approval (the toolkit's
   ask-first list): that is normal, just make the call.
 
@@ -398,7 +400,7 @@ class Manager:
         def on_output(text):
             s.emit("tool_output", ephemeral=True, id=runner_out["id"], text=text)
 
-        runner = tools.Runner(wd, lambda: (self.pool.acquire("fal") or {}).get("secret"), on_output, s.stop_flag)
+        runner = tools.Runner(wd, lambda: (self.pool.acquire("fal") or {}).get("secret"), on_output, s.stop_flag, self.pool)
         done = s.d.setdefault("partial_results", {})
         results = []
         for u in uses:

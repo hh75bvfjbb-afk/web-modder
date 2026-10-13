@@ -320,6 +320,8 @@ function viewKeys(main) {
   };
   renderKeyTable();
   for (const k of STATE.keys || []) if (k.provider === "freellmapi") loadRouter(k.id);
+  $("#assetsCheck").onclick = loadAssets;
+  loadAssets();
 }
 const ROUTER = {};  // key id -> last FreeLLMAPI status, kept across the periodic re-render
 async function loadRouter(id) {
@@ -388,6 +390,28 @@ function renderKeyTable() {
   };
 }
 
+async function loadAssets() {
+  const box = $("#assetsStatus"); if (!box) return;
+  box.innerHTML = `<span class="muted small">проверяю…</span>`;
+  let st;
+  try { st = await api("assets/status"); } catch (e) { box.textContent = e.message; return; }
+  const c = st.comfy || {};
+  const row = (ok, title, how) => `<div class="asset ${ok ? "ok" : ""}"><span class="dot ${ok ? "ok" : "idle"}"></span><b>${title}</b><span class="muted small">${how}</span></div>`;
+  box.innerHTML = [
+    row(st.freellmapi, "Картинки, голос, видео — FreeLLMAPI", st.freellmapi ? "подключён" : "добавьте ключ FreeLLMAPI выше"),
+    row(c.up, "ComfyUI (ваша видеокарта)", c.up ? esc(c.url) : "не запущен — см. ИНСТРУКЦИЯ, часть «Ассеты»"),
+    row(!!c.image_model, "Картинки локально — SDXL", c.image_model ? esc(c.image_model) : "нет модели в ComfyUI/models/checkpoints"),
+    row(c.stable_audio, "Звуки локально — Stable Audio Open", c.stable_audio ? "есть" : "нет модели"),
+    row(c.ace_step, "Музыка — ACE-Step", c.ace_step ? "есть" : "нет модели"),
+    row(c.hunyuan3d, "3D — Hunyuan3D-2", c.hunyuan3d ? "есть" : "нет модели"),
+    row(st.freesound, "Звуки — Freesound", st.freesound ? "ключ есть" : "бесплатный ключ: freesound.org/apiv2/apply"),
+    row(st.edge_tts, "Голос — edge-tts", st.edge_tts ? "встроен" : "нет"),
+    row(st.onnxruntime, "Удаление фона — ISNet", st.onnxruntime ? (st.rmbg_model ? "модель скачана" : "скачается при первом спрайте") : "нет onnxruntime"),
+    row(true, "Увеличение — Real-ESRGAN", st.realesrgan ? "скачан" : "скачается при первом использовании"),
+    row(st.ffmpeg, "Конвертация звука — ffmpeg", st.ffmpeg ? "есть" : "по желанию: winget install ffmpeg"),
+    row(st.fal, "fal.ai (запасной)", st.fal ? "ключ есть" : "не обязателен"),
+  ].join("");
+}
 function renderRouter(st) {
   if (!st.ok) return `<div class="small err-t">Роутер не ответил: ${esc(st.error)}</div>`;
   const c = st.counts || {};

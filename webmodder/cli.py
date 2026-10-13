@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
@@ -19,6 +20,8 @@ def main(argv=None):
         from webmodder.toolkit import run_um
 
         return run_um(argv[1:])
+    if argv[:1] == ["--asset"]:  # free assets from the command line: WebModder.exe --asset sprite --prompt "..."
+        return asset_cli(argv[1:])
     ap = argparse.ArgumentParser(prog="webmodder", description="Web Modder: моды для любых игр через браузер")
     ap.add_argument("--host", default=os.environ.get("WM_HOST", "127.0.0.1"),
                     help="адрес (по умолчанию 127.0.0.1 — только этот ПК)")
@@ -44,3 +47,28 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
+
+
+def asset_cli(argv):
+    from pathlib import Path
+
+    from webmodder import assets
+    from webmodder.keys import KeyPool
+
+    ap = argparse.ArgumentParser(prog="WebModder.exe --asset", description="бесплатные ассеты (как инструмент make_asset агента)")
+    ap.add_argument("recipe", choices=assets.RECIPES)
+    for opt in ("prompt", "input", "name", "out", "size", "voice", "lyrics", "format", "source"):
+        ap.add_argument("--" + opt)
+    ap.add_argument("--seconds", type=float)
+    ap.add_argument("--pixel", action="store_true")
+    ap.add_argument("--dir", default=".", help="рабочая папка (по умолчанию текущая)")
+    a = ap.parse_args(argv)
+    ctx = assets.Ctx(Path(a.dir).resolve(), KeyPool(), lambda m: print(m, file=sys.stderr))
+    kw = {k: v for k, v in vars(a).items() if k not in ("recipe", "dir") and v not in (None, False)}
+    try:
+        res = assets.make(ctx, a.recipe, **kw)
+    except assets.AssetError as e:
+        print(f"не получилось: {e}", file=sys.stderr)
+        return 1
+    print(json.dumps(res, ensure_ascii=False, indent=1))
+    return 0

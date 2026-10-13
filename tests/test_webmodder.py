@@ -413,3 +413,87 @@ def test_um_launcher_survives_non_ascii_install_path(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "executable", str(odd / "python3"))
     out, _, err = tools.Runner(tmp_path, lambda: None).t_shell("um --version")
     assert not err and "universal-modder" in out, out
+
+
+# ------------------------------------------------------------------ free assets
+def test_free_assets_sprite_sfx_voice(tmp_path):
+    """sprite: FreeLLMAPI image -> flood-fill cut-out -> pixel fit; sfx: Freesound with the most permissive licence."""
+    import base64
+    import io
+
+    from PIL import Image, ImageDraw
+
+    from webmodder import assets, toolkit
+    from webmodder.keys import KeyPool
+
+    if not toolkit.is_ready():
+        pytest.skip("needs WM_TEST_TOOLKIT")
+
+    def png():
+        im = Image.new("RGB", (256, 256), "white")
+        ImageDraw.Draw(im).ellipse((60, 50, 190, 210), fill=(200, 40, 40))
+        b = io.BytesIO()
+        im.save(b, "PNG")
+        return b.getvalue()
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _s(self, code, body, ctype="application/json"):
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            port = self.server.server_address[1]
+            if self.path.startswith("/fs/search/text/"):
+                return self._s(200, json.dumps({"results": [
+                    {"id": 1, "name": "nc", "license": "http://creativecommons.org/licenses/by-nc/4.0/", "username": "a",
+                     "url": "u1", "previews": {"preview-hq-ogg": f"http://127.0.0.1:{port}/p1.ogg"}},
+                    {"id": 2, "name": "cc0", "license": "http://creativecommons.org/publicdomain/zero/1.0/", "username": "b",
+                     "url": "u2", "previews": {"preview-hq-ogg": f"http://127.0.0.1:{port}/p2.ogg"}}]}).encode())
+            if self.path.endswith(".ogg"):
+                return self._s(200, b"OggS" + self.path.encode(), "audio/ogg")
+            self._s(404, b"{}")
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            if self.path == "/v1/images/generations":
+                return self._s(200, json.dumps({"data": [{"b64_json": base64.b64encode(png()).decode()}]}).encode())
+            if self.path == "/v1/audio/speech":
+                return self._s(200, b"ID3fake", "audio/mpeg")
+            self._s(404, b"{}")
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = srv.server_address[1]
+    try:
+        pool = KeyPool()
+        pool.add("freellmapi-t", base=f"http://127.0.0.1:{port}", probe=False)
+        pool.add("x" * 40, provider="freesound", base=f"http://127.0.0.1:{port}/fs", probe=False)
+        ctx = assets.Ctx(tmp_path, pool)
+        r = assets.make(ctx, "sprite", prompt="a red apple", size="32x32", pixel=True)
+        assert r["source"] == "FreeLLMAPI"
+        final = Image.open(r["files"][-1])
+        assert final.size == (32, 32) and final.mode == "RGBA" and final.getpixel((0, 0))[3] == 0
+        r = assets.make(ctx, "sfx", prompt="explosion", seconds=2)
+        assert r["source"] == "Freesound" and Path(r["files"][0]).read_bytes().endswith(b"p2.ogg")
+        assert "publicdomain/zero" in (tmp_path / "assets" / "gen" / "CREDITS.md").read_text(encoding="utf-8")
+        r = assets.make(ctx, "voice", prompt="Привет", source="freellmapi")
+        assert Path(r["files"][0]).read_bytes() == b"ID3fake"
+        with pytest.raises(assets.AssetError) as e:  # nothing can make music here: the reasons are listed
+            assets.make(ctx, "music", prompt="chiptune", source="comfy")
+        assert "ComfyUI" in str(e.value)
+        lines = (tmp_path / "assets" / "gen" / "assets_manifest.jsonl").read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 3
+    finally:
+        srv.shutdown()
+
+
+def test_make_asset_tool_is_free_to_call(tmp_path):
+    from webmodder.tools import needs_approval
+
+    assert not needs_approval("make_asset", {"recipe": "sprite"}, "smart", tmp_path)

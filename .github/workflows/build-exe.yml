@@ -76,6 +76,17 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or "$out" -notmatch "universal-modder") { throw "um via Git Bash failed: $out" }
           "OK: $out"
 
+      - name: Smoke test free assets inside the exe (background removal on onnxruntime)
+        shell: pwsh
+        env:
+          WM_HOME: ${{ runner.temp }}\wm-home
+        run: |
+          python -c "from PIL import Image, ImageDraw; im=Image.new('RGB',(256,256),'white'); ImageDraw.Draw(im).ellipse((60,50,190,210),fill=(200,40,40)); im.save('apple.png')"
+          .\dist\WebModder.exe --asset rmbg --input apple.png --out assets_test
+          if ($LASTEXITCODE -ne 0) { throw "rmbg in the exe failed" }
+          python -c "from PIL import Image; im=Image.open('assets_test/apple_nobg.png'); a=im.getchannel('A'); assert a.getpixel((5,5))<20 and a.getpixel((128,128))>200, (a.getpixel((5,5)), a.getpixel((128,128))); print('rmbg OK')"
+          .\dist\WebModder.exe --asset status
+
       - uses: actions/upload-artifact@v4
         with:
           name: WebModder-windows

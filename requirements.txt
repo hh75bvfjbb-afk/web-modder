@@ -3,3 +3,6 @@ anthropic>=1.0
 pillow>=10
 numpy>=1.24
 pyyaml>=6
+# free assets: local background removal (ISNet) and free voices
+onnxruntime>=1.18
+edge-tts>=7.0

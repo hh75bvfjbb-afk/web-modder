@@ -141,3 +141,7 @@ body.login { display: grid; place-items: center; }
 .fl { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .router-box .pool { display: grid; grid-template-columns: 180px 1fr 220px; gap: 8px; align-items: center; font-size: 12.5px; }
 @media (max-width: 860px) { .router-box .pool { grid-template-columns: 1fr; } }
+
+.assets-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 6px 14px; }
+.asset { display: grid; grid-template-columns: 14px 1fr; column-gap: 6px; align-items: center; }
+.asset .small { grid-column: 2; }

@@ -15,6 +15,7 @@ import re
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
@@ -51,6 +52,8 @@ PROVIDERS: dict[str, dict] = {
                    "default": "auto:smart", "prefer": [], "fixed_default": True},
     "custom": {"name": "Свой сервер (OpenAI-совместимый)", "kind": "openai", "base": "", "default": "", "prefer": []},
     "fal": {"name": "fal.ai (ассеты)", "kind": "fal", "base": "https://fal.run", "default": "", "prefer": []},
+    "freesound": {"name": "Freesound (звуки)", "kind": "freesound", "base": "https://freesound.org/apiv2", "default": "",
+                  "prefer": []},
 }
 
 def month_key(t: float | None = None) -> str:
@@ -87,6 +90,8 @@ def detect(secret: str) -> list[str]:
         return ["freellmapi"]
     if re.fullmatch(r"[0-9a-f-]{20,}:[0-9a-zA-Z]{16,}", s):
         return ["fal"]
+    if re.fullmatch(r"[0-9a-zA-Z]{40}", s):  # Freesound API keys are 40 alphanumerics
+        return ["freesound", "mistral", "together", "openai", "deepseek"]
     for prefix, prov in (("sk-ant-", "anthropic"), ("sk-or-", "openrouter"), ("AIza", "gemini"), ("gsk_", "groq"),
                          ("xai-", "xai"), ("fw_", "fireworks"), ("sk-proj-", "openai"), ("sk-svcacct-", "openai")):
         if s.startswith(prefix):
@@ -94,6 +99,12 @@ def detect(secret: str) -> list[str]:
     if s.startswith("sk-"):
         return ["openai", "deepseek"]
     return ["mistral", "together", "openai", "deepseek"]
+
+
+def kind_of(k: dict) -> str:
+    """What a key is for: "llm" (the agent's model), "fal" or "freesound" (assets)."""
+    kind = PROVIDERS.get(k["provider"], {}).get("kind")
+    return "llm" if kind in ("anthropic", "openai") else kind
 
 
 def mask(secret: str) -> str:
@@ -119,6 +130,9 @@ def list_models(provider: str, secret: str, base: str | None = None) -> tuple[in
     base = (base or p["base"]).rstrip("/")
     if p["kind"] == "fal":
         return 200, [], ""
+    if p["kind"] == "freesound":
+        status, _, err = _http_json(base + "/search/text/?query=test&page_size=1&token=" + urllib.parse.quote(secret), {})
+        return status, [], err
     if p["kind"] == "anthropic":
         status, js, err = _http_json(base + "/v1/models?limit=100", {"x-api-key": secret, "anthropic-version": "2023-06-01"})
     else:
@@ -178,7 +192,7 @@ class KeyPool:
         return out
 
     def summary(self) -> dict:
-        llm = [k for k in self.keys if PROVIDERS.get(k["provider"], {}).get("kind") != "fal"]
+        llm = [k for k in self.keys if kind_of(k) == "llm"]
         return {"llm_total": len(llm), "llm_ready": sum(1 for k in llm if self._usable(k)),
                 "fal_total": sum(1 for k in self.keys if k["provider"] == "fal"),
                 "fal_ready": sum(1 for k in self.keys if k["provider"] == "fal" and self._usable(k))}
@@ -310,7 +324,7 @@ class KeyPool:
         exclude = exclude or set()
         with self.cond:
             cands = [k for k in self.keys if k["id"] not in exclude and self._usable(k)
-                     and ((PROVIDERS[k["provider"]]["kind"] == "fal") == (kind == "fal"))]
+                     and (kind_of(k) == kind or k["provider"] == kind)]
             if not cands:
                 return None
             for k in cands:
@@ -322,7 +336,7 @@ class KeyPool:
         """Seconds until a cooling key comes back; None when nothing is cooling (all parked or none)."""
         now = time.time()
         ts = [k.get("cooldown_until", 0) - now for k in self.keys if k["status"] == "cooldown"
-              and ((PROVIDERS[k["provider"]]["kind"] == "fal") == (kind == "fal"))]
+              and (kind_of(k) == kind or k["provider"] == kind)]
         return max(0.0, min(ts)) if ts else None
 
     def wait(self, timeout: float):

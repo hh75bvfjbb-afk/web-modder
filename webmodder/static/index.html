@@ -140,6 +140,12 @@
         <input name="budget" type="number" min="0" step="1000000" placeholder="например 50000000"></label>
       <div class="row"><button class="btn primary">Подключить FreeLLMAPI</button><span id="flMsg" class="muted"></span></div>
     </form>
+    <div class="card" id="assetsCard">
+      <div class="row"><b>Бесплатные ассеты (вместо fal)</b><button class="btn" id="assetsCheck" type="button">Проверить</button></div>
+      <p class="muted small">Агент делает спрайты, звуки, музыку, голос и 3D через бесплатные источники, а fal использует
+        только если больше нечем. Что подключено:</p>
+      <div id="assetsStatus" class="assets-grid"></div>
+    </div>
     <form id="keyForm" class="card form">
       <label>Ключи <span class="muted">(можно несколько — по одному в строке)</span>
         <textarea name="secret" rows="3" placeholder="sk-ant-…&#10;sk-or-…&#10;AIza…&#10;fal-ключ вида uuid:secret"></textarea>

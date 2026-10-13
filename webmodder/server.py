@@ -250,6 +250,10 @@ def make_handler(app: App):
                         raise KeyError("/".join(sub))
                     return self._json(s.summary())
             # ------------------------------------------------ toolkit
+            if p == ["assets", "status"] and method == "GET":
+                from webmodder import assets
+
+                return self._json(assets.status(assets.Ctx(Path.home(), pool)))
             if p == ["games"] and method == "GET":
                 return self._json({"games": app.games(refresh="refresh" in qs)})
             if p == ["kb"] and method == "GET":
